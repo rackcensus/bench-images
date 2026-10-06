@@ -135,16 +135,17 @@ for arch in "${arches[@]}"; do
   fi
   python3 -I -c 'import json, sys
 verify, refs, arch = json.load(open(sys.argv[1])), json.load(open(sys.argv[2])), sys.argv[3]
-machine = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(verify["host"]["machine"])
+host = verify["host"]["machine"]
+machine = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(host)
 if verify["arch"] != arch:
-    raise SystemExit(f"{sys.argv[1]} holds {verify['arch']} results, not {arch}")
+    raise SystemExit(sys.argv[1] + " does not hold " + arch + " results")
 if "refs" not in verify:
-    print(f"{arch} verify results do not record digests, trusting that they cover {refs['wrk'].split('@')[1][:19]} and friends")
+    print(arch + " verify results do not record digests, so they are trusted to cover these images")
 elif verify["refs"] != refs:
-    changed = sorted(n for n in refs if verify["refs"].get(n) != refs[n])
-    raise SystemExit(f"{arch} verify results cover different digests for {', '.join(changed)}")
+    changed = ", ".join(sorted(n for n in refs if verify["refs"].get(n) != refs[n]))
+    raise SystemExit(arch + " verify results cover different digests for " + changed)
 if machine != arch:
-    print(f"{arch} was verified under emulation on {verify['host']['machine']}, so its throughput and memory numbers run high")' \
+    print(arch + " was verified under emulation on " + host + ", so its throughput and memory numbers run high")' \
     "$out/verify-$arch.json" "$refs" "$arch"
 done
 
