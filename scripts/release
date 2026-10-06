@@ -9,7 +9,7 @@ built=(wrk sysbench memtier tfb-postgres woo-app woo-db)
 arches=(amd64 arm64)
 
 usage() {
-  echo "usage: scripts/release <vYYYY.MM.DD-N> [--built <image tag>] [--verify <verify json>]... [--publish]" >&2
+  echo "usage: scripts/release <vYYYY.MM.DD-N> [--built <image tag>] [--verify <verify json>]... [--private] [--publish]" >&2
   exit 64
 }
 
@@ -18,12 +18,14 @@ release=$1
 shift
 built_tag=
 publish=no
+private=no
 verify_files=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --built) [ $# -ge 2 ] || usage; built_tag=$2; shift 2 ;;
     --verify) [ $# -ge 2 ] || usage; verify_files+=("$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"); shift 2 ;;
     --publish) publish=yes; shift ;;
+    --private) private=yes; shift ;;
     *) usage ;;
   esac
 done
@@ -181,7 +183,11 @@ if [ "$publish" != yes ]; then
   exit 0
 fi
 
-scripts/anon-pull "$out/images-resolved.json"
+if [ "$private" = yes ]; then
+  RC_PULL_AUTH="$(gh api user --jq .login):$(gh auth token)" scripts/anon-pull "$out/images-resolved.json"
+else
+  scripts/anon-pull "$out/images-resolved.json"
+fi
 python3 -I -c 'import json, sys
 for image in json.load(open(sys.argv[1]))["images"].values():
     print(image["repo"], image["index"])' "$out/images-resolved.json" |
