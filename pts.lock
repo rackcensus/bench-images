@@ -25,5 +25,10 @@
       "md5": "a713ea44ac655e3779f19f785dbddb82",
       "sha256": "4fff997b3f7e476856eefd3757f898476fa8899e716f78cce13b520169bbe805"
     }
-  ]
+  ],
+  "assets": {
+    "repo": "ghcr.io/rackcensus/pts-assets",
+    "tag": "10.8.6-be12163",
+    "manifest": "sha256:92ea63d4726a37e6cf52f4128f1cf1f07ae910b1792cb31f4faa52ea7c2f75f5"
+  }
 }

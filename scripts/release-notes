@@ -14,7 +14,8 @@ def main(argv):
         lines.append(f"| {name} | `{image['index']}` | {image.get('source', 'built here')} |")
     lines.append("")
     pts = manifest["pts"]
-    lines.append(f"Phoronix Test Suite {pts['version']} at {pts['commit']}, plus {', '.join(d['file'] for d in pts['downloads'])}.")
+    lines.append(f"Phoronix Test Suite {pts['version']} at {pts['commit']}, plus {', '.join(d['file'] for d in pts['downloads'])}, "
+                 f"served from {pts['assets']}.")
     fork = manifest["fork"]
     if manifest["frameworks"]:
         lines.append(f"{len(manifest['frameworks'])} frameworks from {fork['repo']} at {fork['sha']}.")
@@ -23,7 +24,7 @@ def main(argv):
     woo = manifest["woocommerce"]
     versions = woo["versions"]
     lines.append(f"WooCommerce store: WordPress {versions['wordpress']}, WooCommerce {versions['woocommerce']}, "
-                 f"{versions['theme']}, PHP {versions['php']}. php-fpm child RSS under load: "
+                 f"{versions['theme']}, PHP {versions['php']}. php-fpm child PSS under load: "
                  f"{woo['rss_proc_mb']['amd64']} MB on amd64, {woo['rss_proc_mb']['arm64']} MB on arm64.")
     print("\n".join(lines))
 

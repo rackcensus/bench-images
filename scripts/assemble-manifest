@@ -37,20 +37,22 @@ def build_images(resolved, verify):
     return images
 
 
-def build_pts(release, repo, pts_dir):
+def build_pts(pts_dir):
     lock = load(ROOT / "pts.lock")
-    base = f"https://github.com/{repo}/releases/download/{release}"
-    archive = pathlib.Path(pts_dir) / lock["archive"]["file"]
-    if sha256(archive) != lock["archive"]["sha256"]:
-        raise SystemExit(f"{archive} does not match pts.lock")
-    downloads = []
-    for item in lock["downloads"]:
-        path = pathlib.Path(pts_dir) / item["file"]
-        if sha256(path) != item["sha256"]:
-            raise SystemExit(f"{path} does not match pts.lock")
-        downloads.append({"file": item["file"], "url": f"{base}/{item['file']}", "sha256": item["sha256"]})
-    return {"commit": lock["commit"], "version": lock["pts_version"], "url": f"{base}/{archive.name}",
-            "sha256": lock["archive"]["sha256"], "downloads": downloads}
+    assets = lock["assets"]
+    path = assets["repo"].removeprefix("ghcr.io/")
+    entries = []
+    for item in [lock["archive"]] + lock["downloads"]:
+        file = pathlib.Path(pts_dir) / item["file"]
+        if sha256(file) != item["sha256"]:
+            raise SystemExit(f"{file} does not match pts.lock")
+        entries.append({"file": item["file"], "sha256": item["sha256"],
+                        "url": f"https://ghcr.io/v2/{path}/blobs/sha256:{item['sha256']}"})
+    archive, downloads = entries[0], entries[1:]
+    pts = {"commit": lock["commit"], "version": lock["pts_version"], **archive,
+           "assets": f"{assets['repo']}@{assets['manifest']}", "downloads": downloads}
+    token_url = f"https://ghcr.io/token?scope=repository:{path}:pull"
+    return pts, token_url
 
 
 def merge_frameworks(path, images):
@@ -80,7 +82,7 @@ def merge_frameworks(path, images):
 def build_woocommerce(seed, verify):
     memory = {arch: verify[arch]["checks"]["woo"]["memory"] for arch in ARCHES}
     return {
-        "rss_proc_mb": {arch: math.ceil(memory[arch]["rss_proc_mb"]) for arch in ARCHES},
+        "rss_proc_mb": {arch: math.ceil(memory[arch]["pss_proc_mb"]) for arch in ARCHES},
         "product_ids": seed["product_ids"],
         "category_paths": seed["category_paths"],
         "search_terms": seed["search_terms"],
@@ -94,7 +96,6 @@ def build_woocommerce(seed, verify):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--release", required=True)
-    parser.add_argument("--repo", default="rackcensus/bench-images")
     parser.add_argument("--resolved", required=True)
     parser.add_argument("--verify", action="append", required=True)
     parser.add_argument("--woo-seed", required=True)
@@ -121,11 +122,13 @@ def main():
 
     images = build_images(resolved, verify)
     fork, frameworks = merge_frameworks(args.frameworks, images)
+    pts, token_url = build_pts(args.pts_dir)
     manifest = {
         "schema": 1,
         "release": args.release,
+        "registry_token_url": token_url,
         "fork": fork,
-        "pts": build_pts(args.release, args.repo, args.pts_dir),
+        "pts": pts,
         "images": images,
         "frameworks": frameworks,
         "woocommerce": build_woocommerce(seed, verify),

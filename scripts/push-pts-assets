@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+import argparse
+import base64
+import hashlib
+import json
+import pathlib
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+REGISTRY = "ghcr.io"
+REPO = "rackcensus/pts-assets"
+MANIFEST_TYPE = "application/vnd.oci.image.manifest.v1+json"
+ARTIFACT_TYPE = "application/vnd.rackcensus.pts-assets.v1"
+EMPTY = b"{}"
+EMPTY_CONFIG = {
+    "mediaType": "application/vnd.oci.empty.v1+json",
+    "digest": "sha256:" + hashlib.sha256(EMPTY).hexdigest(),
+    "size": len(EMPTY),
+    "data": base64.b64encode(EMPTY).decode(),
+}
+
+
+def lock():
+    return json.loads((ROOT / "pts.lock").read_text())
+
+
+def files(pts):
+    return [pts["archive"]] + pts["downloads"]
+
+
+def read_files(pts, directory):
+    blobs = []
+    for item in files(pts):
+        path = pathlib.Path(directory) / item["file"]
+        data = path.read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        if digest != item["sha256"]:
+            raise SystemExit(f"{path} has sha256 {digest}, pts.lock says {item['sha256']}")
+        blobs.append((item["file"], data))
+    return blobs
+
+
+def manifest_for(pts, blobs):
+    commit = pts["commit"]
+    manifest = {
+        "schemaVersion": 2,
+        "mediaType": MANIFEST_TYPE,
+        "artifactType": ARTIFACT_TYPE,
+        "config": EMPTY_CONFIG,
+        "layers": [
+            {
+                "mediaType": "application/octet-stream",
+                "digest": "sha256:" + hashlib.sha256(data).hexdigest(),
+                "size": len(data),
+                "annotations": {"org.opencontainers.image.title": name},
+            }
+            for name, data in blobs
+        ],
+        "annotations": {
+            "org.opencontainers.image.source": "https://github.com/rackcensus/bench-images",
+            "org.opencontainers.image.description": (
+                f"Phoronix Test Suite {pts['pts_version']} at {commit[:7]} and the source tarballs its "
+                "pinned test profiles download. Each file is one raw blob, addressed by its sha256."
+            ),
+            "org.opencontainers.image.version": f"{pts['pts_version']}-{commit[:7]}",
+        },
+    }
+    body = json.dumps(manifest, separators=(",", ":")).encode()
+    return body, "sha256:" + hashlib.sha256(body).hexdigest()
+
+
+class Registry:
+    def __init__(self, user, secret):
+        query = urllib.parse.urlencode({"scope": f"repository:{REPO}:pull,push", "service": REGISTRY})
+        basic = base64.b64encode(f"{user}:{secret}".encode()).decode()
+        status, body, _ = self.call("GET", f"https://{REGISTRY}/token?{query}", {"Authorization": f"Basic {basic}"})
+        if status != 200:
+            raise SystemExit(f"ghcr.io refused a push token for {REPO} as {user}: {status} {body[:200]!r}")
+        self.token = json.loads(body)["token"]
+
+    @staticmethod
+    def call(method, url, headers=None, data=None):
+        request = urllib.request.Request(url, data=data, method=method)
+        for key, value in (headers or {}).items():
+            request.add_unredirected_header(key, value)
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                return response.status, response.read(), response.headers
+        except urllib.error.HTTPError as error:
+            return error.code, error.read(), error.headers
+
+    def request(self, method, path, headers=None, data=None):
+        url = path if path.startswith("https://") else f"https://{REGISTRY}{path}"
+        return self.call(method, url, {"Authorization": f"Bearer {self.token}", **(headers or {})}, data)
+
+    def has_blob(self, digest):
+        status, _, _ = self.request("HEAD", f"/v2/{REPO}/blobs/{digest}")
+        return status == 200
+
+    def upload_blob(self, name, data):
+        digest = "sha256:" + hashlib.sha256(data).hexdigest()
+        if self.has_blob(digest):
+            print(f"{name} is already in {REGISTRY}/{REPO} as {digest}")
+            return
+        status, body, headers = self.request("POST", f"/v2/{REPO}/blobs/uploads/", {"Content-Length": "0"}, b"")
+        if status != 202:
+            raise SystemExit(f"starting the upload of {name} returned {status} {body[:200]!r}")
+        location = urllib.parse.urljoin(f"https://{REGISTRY}/", headers["Location"])
+        separator = "&" if "?" in location else "?"
+        status, body, _ = self.request(
+            "PUT", f"{location}{separator}digest={urllib.parse.quote(digest)}",
+            {"Content-Type": "application/octet-stream", "Content-Length": str(len(data))}, data)
+        if status != 201:
+            raise SystemExit(f"uploading {name} returned {status} {body[:200]!r}")
+        print(f"uploaded {name} ({len(data)} bytes) as {digest}")
+
+    def put_manifest(self, reference, body):
+        status, response, headers = self.request(
+            "PUT", f"/v2/{REPO}/manifests/{reference}", {"Content-Type": MANIFEST_TYPE}, body)
+        if status != 201:
+            raise SystemExit(f"pushing the manifest as {reference} returned {status} {response[:300]!r}")
+        return headers.get("Docker-Content-Digest")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=f"push the PTS archive and downloads to {REGISTRY}/{REPO}")
+    parser.add_argument("dir", help="directory holding the files pts-archive wrote")
+    parser.add_argument("--user", help="registry user, the token comes from stdin")
+    parser.add_argument("--tag", action="append", default=[], help="extra tag for the manifest")
+    parser.add_argument("--digest-only", action="store_true", help="print the manifest digest and push nothing")
+    args = parser.parse_args()
+
+    pts = lock()
+    blobs = read_files(pts, args.dir)
+    body, digest = manifest_for(pts, blobs)
+    locked = pts.get("assets", {}).get("manifest")
+    if args.digest_only:
+        print(digest)
+        return
+    if locked != digest:
+        raise SystemExit(f"the pts-assets manifest is {digest}, pts.lock says {locked}")
+    if not args.user:
+        raise SystemExit("--user is required to push")
+    secret = sys.stdin.read().strip()
+    if not secret:
+        raise SystemExit("pipe a token with write:packages on stdin")
+
+    registry = Registry(args.user, secret)
+    registry.upload_blob("empty config", EMPTY)
+    for name, data in blobs:
+        registry.upload_blob(name, data)
+    for reference in [pts["assets"]["tag"], *args.tag]:
+        pushed = registry.put_manifest(reference, body)
+        if pushed and pushed != digest:
+            raise SystemExit(f"{REGISTRY}/{REPO}:{reference} came back as {pushed}, expected {digest}")
+        print(f"tagged {REGISTRY}/{REPO}:{reference} at {digest}")
+    status, response, _ = registry.request("GET", f"/v2/{REPO}/manifests/{digest}", {"Accept": MANIFEST_TYPE})
+    if status != 200 or "sha256:" + hashlib.sha256(response).hexdigest() != digest:
+        raise SystemExit(f"reading {REGISTRY}/{REPO}@{digest} back returned {status}")
+    print(f"{REGISTRY}/{REPO}@{digest} holds {len(blobs)} files")
+
+
+if __name__ == "__main__":
+    main()

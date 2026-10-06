@@ -9,8 +9,8 @@ CHECKS = ["wrk", "sysbench", "memtier", "pgbench", "woo"]
 
 
 def main(argv):
-    if len(argv) != 3:
-        raise SystemExit("usage: collect.py <verify out dir> <arch> <unpacked sizes json>")
+    if len(argv) not in (3, 4):
+        raise SystemExit("usage: collect.py <verify out dir> <arch> <unpacked sizes json> [refs json]")
     out, arch, sizes_path = pathlib.Path(argv[0]), argv[1], argv[2]
     checks = {}
     for check in CHECKS:
@@ -26,6 +26,8 @@ def main(argv):
         "sizes": json.loads(pathlib.Path(sizes_path).read_text()),
         "checks": checks,
     }
+    if len(argv) == 4:
+        result["refs"] = json.loads(pathlib.Path(argv[3]).read_text())
     print(json.dumps(result, indent=2))
 
 

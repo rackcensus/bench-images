@@ -1,8 +1,12 @@
 name: release
 
 on:
-  push:
-    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to create, vYYYY.MM.DD-N
+        type: string
+        required: true
 
 permissions:
   contents: write
@@ -12,10 +16,17 @@ jobs:
   check:
     runs-on: ubuntu-24.04
     steps:
-      - name: Check the tag format
+      - name: Check the tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
         run: |
-          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]+$ ]]; then
-            echo "tag $GITHUB_REF_NAME is not vYYYY.MM.DD-N"
+          if [[ ! "$TAG" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]+$ ]]; then
+            echo "tag $TAG is not vYYYY.MM.DD-N"
+            exit 1
+          fi
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "release $TAG already exists"
             exit 1
           fi
 
@@ -26,6 +37,8 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ inputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -60,7 +73,7 @@ jobs:
           if [ -n "${{ steps.fork.outputs.path }}" ]; then
             args=(--frameworks "${{ steps.fork.outputs.path }}")
           fi
-          scripts/assemble-manifest --release "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+          scripts/assemble-manifest --release "$TAG" \
             --resolved build/images-resolved.json \
             --verify build/verify/verify-amd64/verify-amd64.json \
             --verify build/verify/verify-arm64/verify-arm64.json \
@@ -77,10 +90,10 @@ jobs:
         run: |
           python3 -c 'import json; [print(i["repo"], i["index"]) for n, i in json.load(open("build/images-resolved.json"))["images"].items()]' |
           while read -r repo index; do
-            docker buildx imagetools create -t "$repo:$GITHUB_REF_NAME" "$repo@$index"
-            tagged=$(docker buildx imagetools inspect "$repo:$GITHUB_REF_NAME" --format '{{json .Manifest}}' | python3 -c 'import json, sys; print(json.load(sys.stdin)["digest"])')
-            [ "$tagged" = "$index" ] || { echo "$repo:$GITHUB_REF_NAME points at $tagged, expected $index"; exit 1; }
-            echo "tagged $repo:$GITHUB_REF_NAME"
+            docker buildx imagetools create -t "$repo:$TAG" "$repo@$index"
+            tagged=$(docker buildx imagetools inspect "$repo:$TAG" --format '{{json .Manifest}}' | python3 -c 'import json, sys; print(json.load(sys.stdin)["digest"])')
+            [ "$tagged" = "$index" ] || { echo "$repo:$TAG points at $tagged, expected $index"; exit 1; }
+            echo "tagged $repo:$TAG"
           done
       - name: Write SHA256SUMS
         working-directory: build/release
@@ -93,4 +106,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           scripts/release-notes build/release/images.json > build/release-notes.md
-          gh release create "$GITHUB_REF_NAME" build/release/* --title "$GITHUB_REF_NAME" --notes-file build/release-notes.md --verify-tag
+          gh release create "$TAG" build/release/* --target "$GITHUB_SHA" --title "$TAG" --notes-file build/release-notes.md

@@ -22,7 +22,7 @@ Everything here is built or copied for `linux/amd64` and `linux/arm64`, and ever
 
 Every `FROM` line is pinned by digest, and so is every download (WordPress, WooCommerce, WP-CLI and the WordPress importer go through `ADD --checksum`).
 
-Releases also carry `pts.tar.gz` (the Phoronix Test Suite at commit `be12163`), the two source tarballs PTS fetches for `pts/stream-1.3.4` and `pts/schbench-1.2.0`, `images.json`, and `SHA256SUMS`.
+Releases also carry `images.json` and `SHA256SUMS`, plus copies of `pts.tar.gz` (the Phoronix Test Suite at commit `be12163`) and the two source tarballs PTS fetches for `pts/stream-1.3.4` and `pts/schbench-1.2.0`. The repository is private, so boxes can't download release assets. They pull those three files from `ghcr.io/rackcensus/pts-assets` instead (more on that below).
 
 ## The built images
 
@@ -98,11 +98,30 @@ If Docker Hub refuses a copy (rate limits happen), `scripts/mirror` retries thro
 
 `pts.lock` pins the PTS commit and the files PTS would otherwise download. `scripts/pts-archive` rebuilds `pts.tar.gz` with `git archive --prefix=phoronix-test-suite/` and `gzip -9 -n` inside the pinned Ubuntu image, then checks both the tar and the gzip hashes against the lock. The tar comes out identical from git 2.43 and git 2.50, so the asset is byte-stable and anyone can reproduce the hash. The stream and schbench tarballs are fetched from phoronix-test-suite.com and checked the same way.
 
+Boxes get the three files from `ghcr.io/rackcensus/pts-assets`, an OCI artifact where each file is its own raw blob (`application/octet-stream`, not tarred), so a blob's digest is the file's sha256. `scripts/push-pts-assets` uploads the files and writes the manifest itself rather than going through oras, which keeps the manifest byte-stable: same files, same manifest digest, every time. That digest is pinned in `pts.lock` under `assets`, and the script refuses to push anything that doesn't hash to it. It tags the manifest `10.8.6-be12163`, plus any `--tag` you pass, and reads the token from stdin:
+
+```sh
+scripts/pts-archive build/pts
+gh auth token | scripts/push-pts-assets build/pts --user <your github login>
+```
+
+Pass `--digest-only` to print the manifest digest without pushing, which is how you get the new value for `pts.lock` after bumping PTS.
+
+Downloading a file anonymously takes two requests, because GHCR wants a bearer token even for public packages. Without one, the blob URL returns 401.
+
+```sh
+token=$(curl -s 'https://ghcr.io/token?scope=repository:rackcensus/pts-assets:pull' | jq -r .token)
+curl -fsSL -H "Authorization: Bearer $token" -o pts.tar.gz \
+  https://ghcr.io/v2/rackcensus/pts-assets/blobs/sha256:adca64f6e9a9c500b81b36a207f46aad633575c98c5508caca607742cb8797f4
+```
+
+The blob URL redirects to `pkg-containers.githubusercontent.com`. Sending the Authorization header along on that redirect works, and so does dropping it.
+
 PTS at `be12163` already carries `pts/stream-1.3.4` and `pts/schbench-1.2.0` in its `ob-cache`, so a box needs no OpenBenchmarking.org access as long as it points `PTS_DOWNLOAD_CACHE` at the two tarballs.
 
 ## Workflows
 
-`build.yml` runs on pushes to main, pull requests from this repo, by hand, and from `release.yml`. It builds the WooCommerce seed once on amd64, then builds every image natively on `ubuntu-24.04` and `ubuntu-24.04-arm`, pushes each one by digest, merges the two digests into one index tagged with the commit sha (and `main` on main), copies the mirrors, and resolves every digest into `images-resolved.json`. It then calls the next two workflows.
+`build.yml` runs by hand and from `release.yml`. It used to run on every push, but the repository is private now and runner minutes on private repositories aren't free. It builds the WooCommerce seed once on amd64, then builds every image natively on `ubuntu-24.04` and `ubuntu-24.04-arm`, pushes each one by digest, merges the two digests into one index tagged with the commit sha (and `main` on main), copies the mirrors, and resolves every digest into `images-resolved.json`. It then calls the next two workflows.
 
 `verify.yml` pulls every image by its platform digest on both architectures, records the unpacked size, and runs each tool at a tiny scale the way a benchmark run will:
 
@@ -112,22 +131,41 @@ PTS at `be12163` already carries `pts/stream-1.3.4` and `pts/schbench-1.2.0` in 
 - pg_test_fsync, `pgbench -i`, and pgbench read-write and select-only with sampled logs against the Postgres mirror, then the `tfb-postgres` schema, the `-c` overrides and the missing preload
 - k6 against `woo-app` and `woo-db`: a page mix of home, shop, category, product and search, then a cart flow of `/?add-to-cart=ID`, cart and checkout with a fresh cookie jar per iteration, checking the `woocommerce_items_in_cart` cookie, the cart contents and the checkout block. Any failed check or failed request fails the job.
 
-While k6 runs, a sidecar that shares the app's PID namespace (with `SYS_PTRACE` and nothing else) samples `smaps_rollup` for every php-fpm child. RSS counts the shared OPcache memory in every child, so the job records RSS, PSS and private memory side by side. The manifest's `rss_proc_mb` is the RSS figure; `memory` has the rest.
+While k6 runs, a sidecar that shares the app's PID namespace (with `SYS_PTRACE` and nothing else) samples `smaps_rollup` for every php-fpm child. RSS counts the shared OPcache memory in every child, so the job records RSS, PSS and private memory side by side. The manifest's `rss_proc_mb` carries PSS, rounded up, because that's what the sizing math wants (the field kept its name for compatibility). `memory` has all three.
 
-`anon-pull.yml` resolves the digests with credentials in one job, then a second job with no registry login fetches an anonymous token and every manifest, and pulls one image with an empty Docker config. If a package is private it names the package and fails.
+`anon-pull.yml` resolves the digests with credentials in one job, then a second job with no registry login fetches an anonymous token and every manifest, and pulls one image with an empty Docker config. It also downloads every PTS file from `pts-assets` with an anonymous token and checks each one against `pts.lock`. If a package is private or missing, it names the package and fails.
 
-`release.yml` runs when a `vYYYY.MM.DD-N` tag is pushed. It runs the whole build, verify and anon-pull chain against the tagged commit, builds the PTS assets, pulls `frameworks.json` from the fork release pinned in `frameworks.lock`, assembles `images.json`, tags every image with the release name, writes `SHA256SUMS`, and publishes the GitHub release.
+`release.yml` runs by hand with a `tag` input. It runs the whole build, verify and anon-pull chain against the selected commit, builds the PTS files, pulls `frameworks.json` from the fork release pinned in `frameworks.lock`, assembles `images.json`, tags every image with the release name, writes `SHA256SUMS`, and creates the GitHub release along with its tag. It doesn't push `pts-assets`, and anon-pull stops the release if the pinned files aren't there.
 
 ## Cutting a release
 
-Bump whatever needs bumping, push to main, and let `build` go green. Then tag the commit and push the tag:
+Releases run from a laptop. `scripts/release` does what the Actions chain does, without the runner minutes:
 
 ```sh
-git tag v2026.10.07-1
-git push origin v2026.10.07-1
+scripts/release v2026.10.07-1
+scripts/release v2026.10.07-1 --publish
 ```
 
-The `-N` suffix is for a second release on the same day. If any check fails, the release doesn't get created, so fix it, push, and tag again with the next number.
+It won't start with a dirty tree or with a HEAD that isn't on `origin/main`. It logs in to GHCR with your `gh` token through a throwaway Docker config, so your own Docker login stays untouched. From there it:
+
+- builds the seed and all six images for both architectures through an `rc-release` buildx builder (created on first use and kept around for its cache)
+- pushes them by digest, merges each pair into an index tagged with the commit sha, and copies the mirrors
+- resolves every digest and runs the full verify suite against each architecture
+- reads the seed manifest out of `woo-app`, builds the PTS files, merges the pinned `frameworks.json`, and assembles `images.json` and `SHA256SUMS` under `build/release/<tag>/assets`
+
+Without `--publish` it stops there and you can read the manifest. With `--publish` it checks every package for anonymous access (`pts-assets` included), tags every image with the release name, and creates the GitHub release and its tag at HEAD. Push `pts-assets` first; the release script doesn't.
+
+On Apple silicon the amd64 checks run under emulation. They pass, but throughput comes out lower and php-fpm PSS reads about 40% high, so the script prints a warning when that happens and the amd64 memory numbers in that release are conservative.
+
+To release images that are already built and verified, skip both steps:
+
+```sh
+scripts/release v2026.10.07-1 --built <image tag> --verify verify-amd64.json --verify verify-arm64.json --publish
+```
+
+Verify results now record the digests they checked, and the script refuses a file that covers different digests. Results from before that change don't record them, so the script takes your word for it and says so.
+
+The `-N` suffix is for a second release on the same day. `release.yml` still works by hand (`gh workflow run release.yml -f tag=v2026.10.07-1`) if paying for runners is fine.
 
 The app copies the release's `images.json` into `config/bench_images.json` and pins its sha256.
 
@@ -143,8 +181,12 @@ Schema 1, as the app expects it:
 {
   "schema": 1,
   "release": "v2026.10.07-1",
+  "registry_token_url": "https://ghcr.io/token?scope=repository:rackcensus/pts-assets:pull",
   "fork": {"repo": "rackcensus/FrameworkBenchmarks", "sha": null},
-  "pts": {"commit": "be12163...", "version": "10.8.6", "url": "...", "sha256": "...", "downloads": [{"file": "...", "url": "...", "sha256": "..."}]},
+  "pts": {"commit": "be12163...", "version": "10.8.6",
+          "file": "pts.tar.gz", "sha256": "adca64f6...", "url": "https://ghcr.io/v2/rackcensus/pts-assets/blobs/sha256:adca64f6...",
+          "assets": "ghcr.io/rackcensus/pts-assets@sha256:92ea63d4...",
+          "downloads": [{"file": "stream-2013-01-17.tar.bz2", "sha256": "c4d82d3a...", "url": "https://ghcr.io/v2/rackcensus/pts-assets/blobs/sha256:c4d82d3a..."}]},
   "images": {
     "wrk": {"repo": "ghcr.io/rackcensus/wrk", "index": "sha256:...",
             "platforms": {"linux/amd64": {"digest": "sha256:...", "compressed_bytes": 0, "unpacked_bytes": 0}, "linux/arm64": {}}}
@@ -154,7 +196,7 @@ Schema 1, as the app expects it:
 }
 ```
 
-On top of the contract, mirrored images carry `source` (the Docker Hub tag and index digest they came from), and `woocommerce` carries `product_paths`, `pages`, `versions` and `memory`. `compressed_bytes` is the config plus layers as stored in the registry. `unpacked_bytes` is what `docker image inspect` reports after a pull with the overlay2 store.
+Every `url` under `pts` is an anonymous GHCR blob URL, so fetch a token from `registry_token_url` first and send it as a bearer token. `pts.assets` is the artifact manifest those blobs belong to. On top of the contract, mirrored images carry `source` (the Docker Hub tag and index digest they came from), and `woocommerce` carries `product_paths`, `pages`, `versions` and `memory`. `compressed_bytes` is the config plus layers as stored in the registry. `unpacked_bytes` is what `docker image inspect` reports after a pull with the overlay2 store.
 
 ## Working locally
 
@@ -175,4 +217,4 @@ To bump a mirror, run `scripts/lock-mirrors` with the new tags and commit the ou
 
 ## Package visibility
 
-GHCR creates new packages as private, even when the repository is public, and there's no API for changing that. After the first build pushes a new image, an org admin has to open the package under the org's Packages tab, go to Package settings, and change visibility to public. `anon-pull` keeps failing, and so does every release, until that's done.
+GHCR creates new packages as private and there's no API for changing that. After the first push of a new image (or of `pts-assets`), an org admin has to open the package under the org's Packages tab, go to Package settings, and change visibility to public. The repository being private doesn't change this; the packages still have to be public for boxes to pull them. `anon-pull` keeps failing, and so does every release, until that's done.

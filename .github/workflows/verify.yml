@@ -53,7 +53,7 @@ jobs:
         run: verify/all.sh build/verify build/refs.json woo
       - name: Collect results
         run: |
-          python3 verify/collect.py build/verify ${{ matrix.arch }} build/sizes.json > build/verify/verify-${{ matrix.arch }}.json
+          python3 verify/collect.py build/verify ${{ matrix.arch }} build/sizes.json build/refs.json > build/verify/verify-${{ matrix.arch }}.json
           python3 -c 'import json, sys; m = json.load(open(sys.argv[1]))["checks"]["woo"]["memory"]; print("php-fpm child memory on", sys.argv[2], m)' build/verify/verify-${{ matrix.arch }}.json ${{ matrix.arch }}
       - if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
