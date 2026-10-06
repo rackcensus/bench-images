@@ -1,0 +1,64 @@
+user www-data;
+worker_processes @CPUS@;
+worker_rlimit_nofile 200000;
+pid /run/nginx.pid;
+error_log /dev/stderr warn;
+
+events {
+    worker_connections 8192;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    keepalive_requests 100000;
+    server_tokens off;
+    access_log off;
+    client_max_body_size 8m;
+
+    gzip on;
+    gzip_vary on;
+    gzip_comp_level 5;
+    gzip_min_length 256;
+    gzip_types text/css text/plain text/xml application/javascript application/json image/svg+xml;
+
+    server {
+        listen 80 default_server;
+        server_name _;
+        root /var/www/html;
+        index index.php;
+
+        location / {
+            try_files $uri $uri/ /index.php?$args;
+        }
+
+        location ~ \.php$ {
+            try_files $uri =404;
+            fastcgi_pass unix:/run/php-fpm.sock;
+            fastcgi_index index.php;
+            include /etc/nginx/fastcgi_params;
+            fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+            fastcgi_buffer_size 32k;
+            fastcgi_buffers 64 16k;
+            fastcgi_read_timeout 120s;
+        }
+
+        location ~* \.(?:css|js|mjs|jpe?g|png|gif|webp|avif|svg|ico|woff2?)$ {
+            expires 30d;
+            try_files $uri =404;
+        }
+
+        location ~* ^/wp-content/uploads/.*\.php$ {
+            deny all;
+        }
+
+        location ~ /\.(?!well-known) {
+            deny all;
+        }
+    }
+}

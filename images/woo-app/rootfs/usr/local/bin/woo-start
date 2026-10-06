@@ -1,0 +1,38 @@
+#!/bin/bash
+set -euo pipefail
+
+require_count() {
+  if [[ ! $2 =~ ^[1-9][0-9]*$ ]]; then
+    echo "woo-app: $1 must be a positive integer, got '$2'" >&2
+    exit 64
+  fi
+}
+
+cpus=${RC_CPUS:-$(nproc)}
+require_count RC_CPUS "$cpus"
+workers=${RC_WORKERS:-$(( cpus * 2 ))}
+require_count RC_WORKERS "$workers"
+
+sed "s/@WORKERS@/$workers/" /etc/rackcensus/php-fpm.conf.in > /usr/local/etc/php-fpm.d/woo.conf
+sed "s/@CPUS@/$cpus/" /etc/rackcensus/nginx.conf.in > /etc/nginx/nginx.conf
+php-fpm --test 2>/dev/null || php-fpm --test
+nginx -t -q
+
+echo "woo-app starting with $workers php-fpm children and $cpus nginx workers"
+php-fpm --nodaemonize &
+for _ in $(seq 1 100); do
+  [ -S /run/php-fpm.sock ] && break
+  sleep 0.1
+done
+if [ ! -S /run/php-fpm.sock ]; then
+  echo "woo-app: php-fpm never opened /run/php-fpm.sock" >&2
+  exit 1
+fi
+nginx -g 'daemon off;' &
+
+status=0
+wait -n || status=$?
+echo "woo-app: a server process exited with status $status, shutting down" >&2
+kill -TERM $(jobs -p) 2>/dev/null || true
+wait || true
+exit "$status"
