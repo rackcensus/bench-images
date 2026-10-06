@@ -29,7 +29,7 @@ verify_cleanup() {
       docker logs --tail 40 "$c" 2>&1 | sed 's/^/  /' >&2 || true
     done
   fi
-  docker ps -aq --filter "label=$VERIFY_LABEL" | xargs -r docker rm -f > /dev/null 2>&1 || true
+  docker ps -aq --filter "label=$VERIFY_LABEL" | xargs -r docker rm -f -v > /dev/null 2>&1 || true
   docker volume ls -q --filter "label=$VERIFY_LABEL" | xargs -r docker volume rm > /dev/null 2>&1 || true
   docker network ls -q --filter "label=$VERIFY_LABEL" | xargs -r docker network rm > /dev/null 2>&1 || true
   exit "$status"
