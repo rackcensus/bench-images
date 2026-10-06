@@ -1,0 +1,29 @@
+{
+  "repo": "https://github.com/phoronix-test-suite/phoronix-test-suite.git",
+  "commit": "be12163bb02435219d4fd891cd6258597ca9bc2f",
+  "pts_version": "10.8.6",
+  "archive": {
+    "file": "pts.tar.gz",
+    "prefix": "phoronix-test-suite/",
+    "tar_sha256": "15340a018760746aa614797f51b460c33851ec9c730db189d3df71948c8368da",
+    "sha256": "adca64f6e9a9c500b81b36a207f46aad633575c98c5508caca607742cb8797f4"
+  },
+  "downloads": [
+    {
+      "profile": "pts/stream-1.3.4",
+      "file": "stream-2013-01-17.tar.bz2",
+      "url": "http://www.phoronix-test-suite.com/benchmark-files/stream-2013-01-17.tar.bz2",
+      "size": 6274,
+      "md5": "983401204d59466f74a3c8009ddae43a",
+      "sha256": "c4d82d3a5dc08633c1feaf2d10c82857d10868b591e2fbff1d3edff8e9e1cf83"
+    },
+    {
+      "profile": "pts/schbench-1.2.0",
+      "file": "schbench-20230421.tar.xz",
+      "url": "http://phoronix-test-suite.com/benchmark-files/schbench-20230421.tar.xz",
+      "size": 12772,
+      "md5": "a713ea44ac655e3779f19f785dbddb82",
+      "sha256": "4fff997b3f7e476856eefd3757f898476fa8899e716f78cce13b520169bbe805"
+    }
+  ]
+}

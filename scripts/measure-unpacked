@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+import json
+import subprocess
+import sys
+
+
+def main(argv):
+    if len(argv) != 1:
+        raise SystemExit("usage: measure-unpacked <refs json>")
+    refs = json.load(open(argv[0]))
+    driver = subprocess.run(["docker", "info", "-f", "{{.Driver}}"], check=True, capture_output=True, text=True).stdout.strip()
+    sizes = {}
+    for name, ref in refs.items():
+        subprocess.run(["docker", "pull", "-q", ref], check=True, capture_output=True)
+        size = subprocess.run(["docker", "image", "inspect", "-f", "{{.Size}}", ref],
+                              check=True, capture_output=True, text=True).stdout.strip()
+        sizes[name] = int(size)
+        print(f"{name} unpacks to {int(size) / 1048576:.1f} MB", file=sys.stderr)
+    print(json.dumps({"storage_driver": driver, "unpacked_bytes": sizes}, indent=2))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

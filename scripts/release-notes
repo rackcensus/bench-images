@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+import json
+import sys
+
+
+def main(argv):
+    if len(argv) != 1:
+        raise SystemExit("usage: release-notes <images.json>")
+    manifest = json.load(open(argv[0]))
+    lines = [f"Benchmark images for release {manifest['release']}. Boxes pull these by platform digest from images.json.", ""]
+    lines.append("| image | index digest | source |")
+    lines.append("| --- | --- | --- |")
+    for name, image in sorted(manifest["images"].items()):
+        lines.append(f"| {name} | `{image['index']}` | {image.get('source', 'built here')} |")
+    lines.append("")
+    pts = manifest["pts"]
+    lines.append(f"Phoronix Test Suite {pts['version']} at {pts['commit']}, plus {', '.join(d['file'] for d in pts['downloads'])}.")
+    fork = manifest["fork"]
+    if manifest["frameworks"]:
+        lines.append(f"{len(manifest['frameworks'])} frameworks from {fork['repo']} at {fork['sha']}.")
+    else:
+        lines.append("No framework images in this release.")
+    woo = manifest["woocommerce"]
+    versions = woo["versions"]
+    lines.append(f"WooCommerce store: WordPress {versions['wordpress']}, WooCommerce {versions['woocommerce']}, "
+                 f"{versions['theme']}, PHP {versions['php']}. php-fpm child RSS under load: "
+                 f"{woo['rss_proc_mb']['amd64']} MB on amd64, {woo['rss_proc_mb']['arm64']} MB on arm64.")
+    print("\n".join(lines))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

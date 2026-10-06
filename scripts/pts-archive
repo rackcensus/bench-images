@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+out=$(mkdir -p "$1" && cd "$1" && pwd)
+lock="$root/pts.lock"
+gzip_image=ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55
+
+lockval() {
+  python3 -I -c 'import json, sys
+value = json.load(open(sys.argv[1]))
+for key in sys.argv[2:]:
+    value = value[int(key)] if isinstance(value, list) else value[key]
+print(value)' "$lock" "$@"
+}
+
+sha256() {
+  python3 -I -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1"
+}
+
+repo=$(lockval repo)
+commit=$(lockval commit)
+prefix=$(lockval archive prefix)
+file=$(lockval archive file)
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+git -C "$work" init -q
+git -C "$work" fetch -q --depth 1 "$repo" "$commit"
+git -C "$work" archive --format=tar --prefix="$prefix" "$commit" > "$work/pts.tar"
+tar_sha=$(sha256 "$work/pts.tar")
+[ "$tar_sha" = "$(lockval archive tar_sha256)" ] || { echo "pts tar sha256 is $tar_sha, pts.lock says $(lockval archive tar_sha256)" >&2; exit 1; }
+docker run --rm -i "$gzip_image" gzip -9 -n < "$work/pts.tar" > "$out/$file"
+gz_sha=$(sha256 "$out/$file")
+[ "$gz_sha" = "$(lockval archive sha256)" ] || { echo "$file sha256 is $gz_sha, pts.lock says $(lockval archive sha256)" >&2; exit 1; }
+echo "built $file from phoronix-test-suite $commit, sha256 $gz_sha"
+
+count=$(python3 -I -c 'import json, sys; print(len(json.load(open(sys.argv[1]))["downloads"]))' "$lock")
+for i in $(seq 0 $((count - 1))); do
+  name=$(lockval downloads "$i" file)
+  curl -fsSL --retry 3 -o "$out/$name" "$(lockval downloads "$i" url)"
+  sum=$(sha256 "$out/$name")
+  [ "$sum" = "$(lockval downloads "$i" sha256)" ] || { echo "$name sha256 is $sum, pts.lock says $(lockval downloads "$i" sha256)" >&2; exit 1; }
+  echo "fetched $name for $(lockval downloads "$i" profile), sha256 $sum"
+done

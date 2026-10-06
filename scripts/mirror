@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+registry=ghcr.io/rackcensus
+source_annotation="index:org.opencontainers.image.source=https://github.com/rackcensus/bench-images"
+
+names=$(python3 -I -c 'import json, sys; print(" ".join(json.load(open(sys.argv[1]))))' "$root/mirrors.lock")
+for name in $names; do
+  read -r src tag amd64 arm64 < <(python3 -I -c 'import json, sys
+lock = json.load(open(sys.argv[1]))[sys.argv[2]]
+print(lock["source"], lock["tag"], lock["platforms"]["linux/amd64"], lock["platforms"]["linux/arm64"])' "$root/mirrors.lock" "$name")
+  target="$registry/$name:$tag"
+  copied=no
+  for via in "$src" "mirror.gcr.io/${src#docker.io/}"; do
+    if docker buildx imagetools create --annotation "$source_annotation" \
+      --annotation "index:org.opencontainers.image.base.name=$src:$tag" \
+      -t "$target" "$via@$amd64" "$via@$arm64"; then
+      echo "copied $src:$tag to $target via ${via%%/*}"
+      copied=yes
+      break
+    fi
+    echo "copying $name from ${via%%/*} failed, trying the next source"
+  done
+  [ "$copied" = yes ] || { echo "could not copy $name" >&2; exit 1; }
+done

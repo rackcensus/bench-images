@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+arch=${1:-$(docker version -f '{{.Server.Arch}}')}
+builder=${2:-}
+seed="$root/build/woo-seed"
+
+build() {
+  if [ -n "$builder" ]; then
+    docker buildx build --builder "$builder" --platform "linux/$arch" "$@"
+  else
+    docker buildx build --platform "linux/$arch" "$@"
+  fi
+}
+
+for image in wrk sysbench memtier tfb-postgres; do
+  build --load -t "rc/$image:$arch" "$root/images/$image"
+  echo "built rc/$image:$arch"
+done
+
+if [ ! -s "$seed/woocommerce.json" ]; then
+  build --target woo-seed --output "type=local,dest=$seed" "$root/images/woo-app"
+  echo "built the woocommerce seed into $seed"
+fi
+
+for image in woo-app woo-db; do
+  build --build-context "woo-seed=$seed" --load -t "rc/$image:$arch" "$root/images/$image"
+  echo "built rc/$image:$arch"
+done

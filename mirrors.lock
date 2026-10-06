@@ -1,0 +1,47 @@
+{
+  "postgres": {
+    "source": "docker.io/library/postgres",
+    "tag": "18.6",
+    "index": "sha256:fc973eb97c9fd04bfa1840e0f510719a584ccb3be8debfe6a4144637a9dfe8cf",
+    "platforms": {
+      "linux/amd64": "sha256:885953109528ad3dfc90362b1a6f50a78620b5315be19f187753d267e484dc5b",
+      "linux/arm64": "sha256:a63b24165ea0eacced7585766d790ac08bbaefe10a1841f87783a4505d29a69c"
+    }
+  },
+  "mysql": {
+    "source": "docker.io/library/mysql",
+    "tag": "8.4.11",
+    "index": "sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242",
+    "platforms": {
+      "linux/amd64": "sha256:80f4933e3835f9dc4d35a28ec500d7986cb4414e6c6821c5461239cb7beb8995",
+      "linux/arm64": "sha256:ca3f0494c0f1fc86eb45f5e4786a1bb9f64d2f85b562cc74a9595046f6519a42"
+    }
+  },
+  "redis": {
+    "source": "docker.io/library/redis",
+    "tag": "8.10.2",
+    "index": "sha256:c94085d298b738be22c9ccdc0ac3761fa6649df7dd82ad1d42367f3cb9714935",
+    "platforms": {
+      "linux/amd64": "sha256:6e9101032a2126aeeb4b1e862ac77d2fcf26b831ae37e5ff2e69169f82ddd411",
+      "linux/arm64": "sha256:ec87069acc319552b908ba0709277d17a0fe768fcfbdd78b7271d77b4a1bd3ed"
+    }
+  },
+  "mariadb": {
+    "source": "docker.io/library/mariadb",
+    "tag": "12.3.3",
+    "index": "sha256:2bdff1534a7e569fecaf4b10b66ad0d410806e382d9db29ba305448addda97c4",
+    "platforms": {
+      "linux/amd64": "sha256:aed2b5ccc6356b54dda3b461e01584b420e549bb958cdfbf717ac22d75a84602",
+      "linux/arm64": "sha256:8b9f5f8f73f008df0a2bb5859a926a0c0983e71168df2f091cd73e4d368efb39"
+    }
+  },
+  "k6": {
+    "source": "docker.io/grafana/k6",
+    "tag": "2.3.0",
+    "index": "sha256:9c2dee7f8ed74d317e4027c06a10f169b625638189de8d4555d0b3486a5aeb34",
+    "platforms": {
+      "linux/amd64": "sha256:98305727d160c065e1da695619c40ea4becbc3e116a3842da2d6027970e428c2",
+      "linux/arm64": "sha256:06181d5d1aebfde4dce5b5ea970041fd3e7d4613a9ed895f65509525fb73dcb2"
+    }
+  }
+}

@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+import argparse
+import hashlib
+import json
+import math
+import pathlib
+import re
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+ARCHES = ["amd64", "arm64"]
+TAG = re.compile(r"^v\d{4}\.\d{2}\.\d{2}-\d+$")
+
+
+def sha256(path):
+    return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+
+
+def load(path):
+    return json.loads(pathlib.Path(path).read_text())
+
+
+def build_images(resolved, verify):
+    images = {}
+    for name, image in resolved["images"].items():
+        platforms = {}
+        for platform, entry in image["platforms"].items():
+            arch = platform.split("/")[1]
+            unpacked = verify[arch]["sizes"]["unpacked_bytes"].get(name)
+            if unpacked is None:
+                raise SystemExit(f"verify on {arch} did not measure {name}")
+            platforms[platform] = {"digest": entry["digest"], "compressed_bytes": entry["compressed_bytes"],
+                                   "unpacked_bytes": unpacked}
+        images[name] = {"repo": image["repo"], "index": image["index"], "platforms": platforms}
+        if "source" in image:
+            images[name]["source"] = image["source"]
+    return images
+
+
+def build_pts(release, repo, pts_dir):
+    lock = load(ROOT / "pts.lock")
+    base = f"https://github.com/{repo}/releases/download/{release}"
+    archive = pathlib.Path(pts_dir) / lock["archive"]["file"]
+    if sha256(archive) != lock["archive"]["sha256"]:
+        raise SystemExit(f"{archive} does not match pts.lock")
+    downloads = []
+    for item in lock["downloads"]:
+        path = pathlib.Path(pts_dir) / item["file"]
+        if sha256(path) != item["sha256"]:
+            raise SystemExit(f"{path} does not match pts.lock")
+        downloads.append({"file": item["file"], "url": f"{base}/{item['file']}", "sha256": item["sha256"]})
+    return {"commit": lock["commit"], "version": lock["pts_version"], "url": f"{base}/{archive.name}",
+            "sha256": lock["archive"]["sha256"], "downloads": downloads}
+
+
+def merge_frameworks(path, images):
+    lock = load(ROOT / "frameworks.lock")
+    if not path:
+        print("no fork release pinned in frameworks.lock, frameworks stay empty", file=sys.stderr)
+        return {"repo": lock["repo"], "sha": None}, []
+    if lock.get("sha256") and sha256(path) != lock["sha256"]:
+        raise SystemExit(f"{path} does not match the sha256 in frameworks.lock")
+    data = load(path)
+    missing = [key for key in ("images", "frameworks") if key not in data]
+    if missing:
+        raise SystemExit(f"{path} has no {', '.join(missing)} (top level keys: {', '.join(sorted(data))})")
+    fork = data.get("fork") or {"repo": data.get("repo", lock["repo"]), "sha": data.get("sha")}
+    for name, image in data["images"].items():
+        if name in images:
+            raise SystemExit(f"{path} redefines image {name}")
+        images[name] = image
+    names = {f["image"] for f in data["frameworks"]}
+    unknown = sorted(n for n in names if n not in images)
+    if unknown:
+        raise SystemExit(f"frameworks reference images that are not in the manifest: {', '.join(unknown)}")
+    print(f"merged {len(data['frameworks'])} frameworks from {lock['repo']} {lock['release']}", file=sys.stderr)
+    return fork, data["frameworks"]
+
+
+def build_woocommerce(seed, verify):
+    memory = {arch: verify[arch]["checks"]["woo"]["memory"] for arch in ARCHES}
+    return {
+        "rss_proc_mb": {arch: math.ceil(memory[arch]["rss_proc_mb"]) for arch in ARCHES},
+        "product_ids": seed["product_ids"],
+        "category_paths": seed["category_paths"],
+        "search_terms": seed["search_terms"],
+        "product_paths": seed["product_paths"],
+        "pages": seed["pages"],
+        "versions": seed["versions"],
+        "memory": memory,
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--release", required=True)
+    parser.add_argument("--repo", default="rackcensus/bench-images")
+    parser.add_argument("--resolved", required=True)
+    parser.add_argument("--verify", action="append", required=True)
+    parser.add_argument("--woo-seed", required=True)
+    parser.add_argument("--pts-dir", required=True)
+    parser.add_argument("--frameworks")
+    args = parser.parse_args()
+
+    if not TAG.match(args.release):
+        raise SystemExit(f"release tag {args.release} is not vYYYY.MM.DD-N")
+    verify = {}
+    for path in args.verify:
+        data = load(path)
+        verify[data["arch"]] = data
+    missing = [arch for arch in ARCHES if arch not in verify]
+    if missing:
+        raise SystemExit(f"no verify results for {', '.join(missing)}")
+
+    resolved = load(args.resolved)
+    seed = load(args.woo_seed)
+    for arch in ARCHES:
+        verified_seed = verify[arch]["checks"]["woo"]["seed"]
+        if verified_seed["product_ids"] != seed["product_ids"]:
+            raise SystemExit(f"woo seed verified on {arch} differs from the seed being released")
+
+    images = build_images(resolved, verify)
+    fork, frameworks = merge_frameworks(args.frameworks, images)
+    manifest = {
+        "schema": 1,
+        "release": args.release,
+        "fork": fork,
+        "pts": build_pts(args.release, args.repo, args.pts_dir),
+        "images": images,
+        "frameworks": frameworks,
+        "woocommerce": build_woocommerce(seed, verify),
+    }
+    print(json.dumps(manifest, indent=2))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+import json
+import pathlib
+import subprocess
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+REGISTRY = "ghcr.io/rackcensus"
+BUILT = ["wrk", "sysbench", "memtier", "tfb-postgres", "woo-app", "woo-db"]
+PLATFORMS = ["linux/amd64", "linux/arm64"]
+
+
+def imagetools(*args):
+    result = subprocess.run(["docker", "buildx", "imagetools", "inspect", *args], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f"could not inspect {args[0]}: {result.stderr.strip()}")
+    return result.stdout
+
+
+def resolve(name, tag):
+    ref = f"{REGISTRY}/{name}:{tag}"
+    index_digest = json.loads(imagetools(ref, "--format", "{{json .Manifest}}"))["digest"]
+    index = json.loads(imagetools(f"{REGISTRY}/{name}@{index_digest}", "--raw"))
+    platforms = {}
+    for entry in index.get("manifests", []):
+        p = entry.get("platform", {})
+        key = f"{p.get('os')}/{p.get('architecture')}"
+        if key not in PLATFORMS or key in platforms:
+            continue
+        manifest = json.loads(imagetools(f"{REGISTRY}/{name}@{entry['digest']}", "--raw"))
+        compressed = manifest["config"]["size"] + sum(layer["size"] for layer in manifest["layers"])
+        platforms[key] = {"digest": entry["digest"], "compressed_bytes": compressed}
+    missing = [p for p in PLATFORMS if p not in platforms]
+    if missing:
+        raise SystemExit(f"{ref} has no {', '.join(missing)} image")
+    return {"repo": f"{REGISTRY}/{name}", "tag": tag, "index": index_digest, "platforms": platforms}
+
+
+def main(argv):
+    if len(argv) != 1:
+        raise SystemExit("usage: resolve-images <built image tag>")
+    built_tag = argv[0]
+    mirrors = json.loads((ROOT / "mirrors.lock").read_text())
+    images = {}
+    for name in BUILT:
+        images[name] = resolve(name, built_tag)
+        print(f"{name} {built_tag} is {images[name]['index']}", file=sys.stderr)
+    for name, lock in mirrors.items():
+        images[name] = resolve(name, lock["tag"])
+        for platform, digest in lock["platforms"].items():
+            actual = images[name]["platforms"][platform]["digest"]
+            if actual != digest:
+                raise SystemExit(f"mirror {name} {platform} is {actual}, mirrors.lock says {digest}")
+        images[name]["source"] = f"{lock['source']}:{lock['tag']}@{lock['index']}"
+        print(f"{name} {lock['tag']} is {images[name]['index']}, platform digests match mirrors.lock", file=sys.stderr)
+    print(json.dumps({"built_tag": built_tag, "images": images}, indent=2))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

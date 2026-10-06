@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+import json
+import subprocess
+import sys
+
+PLATFORMS = ("linux/amd64", "linux/arm64")
+
+
+def inspect_raw(ref):
+    out = subprocess.run(["docker", "buildx", "imagetools", "inspect", "--raw", ref],
+                         check=True, capture_output=True, text=True).stdout
+    return json.loads(out)
+
+
+def index_digest(ref):
+    out = subprocess.run(["docker", "buildx", "imagetools", "inspect", ref, "--format", "{{json .Manifest}}"],
+                         check=True, capture_output=True, text=True).stdout
+    return json.loads(out)["digest"]
+
+
+def lock(name, source, read_through):
+    repo, tag = source.rsplit(":", 1)
+    lookup = source
+    if read_through and source.startswith("docker.io/"):
+        lookup = read_through + source[len("docker.io"):]
+    index = inspect_raw(lookup)
+    platforms = {}
+    for manifest in index.get("manifests", []):
+        p = manifest.get("platform", {})
+        key = f"{p.get('os')}/{p.get('architecture')}"
+        if key in PLATFORMS and key not in platforms:
+            platforms[key] = manifest["digest"]
+    missing = [p for p in PLATFORMS if p not in platforms]
+    if missing:
+        raise SystemExit(f"{source} has no {', '.join(missing)} image")
+    return {"source": repo, "tag": tag, "index": index_digest(lookup), "platforms": platforms}
+
+
+def main(argv):
+    read_through = None
+    if argv[:1] == ["--read-through"]:
+        read_through, argv = argv[1], argv[2:]
+    if not argv:
+        raise SystemExit("usage: lock-mirrors [--read-through host] name=docker.io/repo:tag ...")
+    result = {}
+    for pair in argv:
+        name, source = pair.split("=", 1)
+        result[name] = lock(name, source, read_through)
+        print(f"locked {name} to {source} {result[name]['index']}", file=sys.stderr)
+    print(json.dumps(result, indent=2))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
