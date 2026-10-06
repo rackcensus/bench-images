@@ -150,6 +150,7 @@ if machine != arch:
 done
 
 woo_app=$(json "$out/refs-$(docker version -f '{{.Server.Arch}}').json" woo-app)
+docker pull -q "$woo_app" > /dev/null
 docker run --rm --entrypoint cat "$woo_app" /usr/share/rackcensus/woocommerce.json > "$out/woocommerce.json"
 echo "read the woocommerce seed manifest out of $woo_app"
 
