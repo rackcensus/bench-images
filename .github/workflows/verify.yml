@@ -1,0 +1,63 @@
+name: verify
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Built image tag to verify (a commit sha)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve pushed digests
+        run: |
+          mkdir -p build
+          scripts/resolve-images "${{ inputs.tag }}" > build/images-resolved.json
+          scripts/platform-refs build/images-resolved.json linux/${{ matrix.arch }} > build/refs.json
+          cat build/refs.json
+      - name: Pull every image and measure unpacked size
+        run: scripts/measure-unpacked build/refs.json > build/sizes.json
+      - name: wrk against a tiny http server
+        run: verify/all.sh build/verify build/refs.json wrk
+      - name: sysbench against mysql over a unix socket
+        run: verify/all.sh build/verify build/refs.json sysbench
+      - name: memtier against redis
+        run: verify/all.sh build/verify build/refs.json memtier
+      - name: pgbench against postgres, tfb-postgres schema and overrides
+        run: verify/all.sh build/verify build/refs.json pgbench
+      - name: k6 against woo-app and woo-db
+        run: verify/all.sh build/verify build/refs.json woo
+      - name: Collect results
+        run: |
+          python3 verify/collect.py build/verify ${{ matrix.arch }} build/sizes.json > build/verify/verify-${{ matrix.arch }}.json
+          python3 -c 'import json, sys; m = json.load(open(sys.argv[1]))["checks"]["woo"]["memory"]; print("php-fpm child memory on", sys.argv[2], m)' build/verify/verify-${{ matrix.arch }}.json ${{ matrix.arch }}
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: verify-${{ matrix.arch }}
+          path: build/verify
+          if-no-files-found: ignore

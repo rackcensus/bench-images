@@ -1,0 +1,169 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  seed:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+      - name: Build the WooCommerce seed
+        run: docker buildx build --platform linux/amd64 --target woo-seed --output type=local,dest=build/woo-seed images/woo-app
+      - name: Show the seed manifest
+        run: cat build/woo-seed/woocommerce.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: woo-seed
+          path: build/woo-seed
+          if-no-files-found: error
+
+  build:
+    needs: seed
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [wrk, sysbench, memtier, tfb-postgres, woo-app, woo-db]
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - if: startsWith(matrix.image, 'woo-')
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: woo-seed
+          path: build/woo-seed
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: images/${{ matrix.image }}
+          platforms: linux/${{ matrix.arch }}
+          build-contexts: ${{ startsWith(matrix.image, 'woo-') && 'woo-seed=build/woo-seed' || '' }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=${{ matrix.image }}
+          outputs: type=image,name=ghcr.io/rackcensus/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }},mode=max
+      - name: Record the digest
+        run: |
+          mkdir -p build/digests
+          echo "${{ steps.build.outputs.digest }}" > "build/digests/${{ matrix.image }}-${{ matrix.arch }}"
+          echo "pushed ghcr.io/rackcensus/${{ matrix.image }}@${{ steps.build.outputs.digest }} for linux/${{ matrix.arch }}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: digest-${{ matrix.image }}-${{ matrix.arch }}
+          path: build/digests/${{ matrix.image }}-${{ matrix.arch }}
+          if-no-files-found: error
+
+  merge:
+    needs: build
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [wrk, sysbench, memtier, tfb-postgres, woo-app, woo-db]
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: digest-${{ matrix.image }}-*
+          path: build/digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Merge the per-arch images into one index
+        run: |
+          repo=ghcr.io/rackcensus/${{ matrix.image }}
+          tags=(-t "$repo:${{ github.sha }}")
+          if [ "${{ github.ref }}" = refs/heads/main ]; then
+            tags+=(-t "$repo:main")
+          fi
+          sources=()
+          for f in build/digests/*; do
+            sources+=("$repo@$(cat "$f")")
+          done
+          [ "${#sources[@]}" -eq 2 ] || { echo "expected 2 platform digests, found ${#sources[@]}"; exit 1; }
+          docker buildx imagetools create \
+            --annotation "index:org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            --annotation "index:org.opencontainers.image.revision=${{ github.sha }}" \
+            "${tags[@]}" "${sources[@]}"
+          docker buildx imagetools inspect "$repo:${{ github.sha }}"
+
+  mirror:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Copy mirrored images by digest
+        run: scripts/mirror
+
+  resolve:
+    needs: [merge, mirror]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve every pushed digest
+        run: |
+          mkdir -p build
+          scripts/resolve-images "${{ github.sha }}" > build/images-resolved.json
+          cat build/images-resolved.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: images-resolved
+          path: build/images-resolved.json
+          if-no-files-found: error
+
+  verify:
+    needs: resolve
+    uses: ./.github/workflows/verify.yml
+    with:
+      tag: ${{ github.sha }}
+
+  anon-pull:
+    needs: resolve
+    uses: ./.github/workflows/anon-pull.yml
+    with:
+      tag: ${{ github.sha }}

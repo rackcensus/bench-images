@@ -1,0 +1,96 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check the tag format
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]+$ ]]; then
+            echo "tag $GITHUB_REF_NAME is not vYYYY.MM.DD-N"
+            exit 1
+          fi
+
+  build:
+    needs: check
+    uses: ./.github/workflows/build.yml
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: images-resolved
+          path: build
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: verify-*
+          path: build/verify
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: woo-seed
+          path: build/woo-seed
+      - name: Build the PTS archive and fetch the PTS downloads
+        run: scripts/pts-archive build/release
+      - name: Fetch frameworks.json from the pinned fork release
+        id: fork
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          read -r repo release asset < <(python3 -c 'import json; l = json.load(open("frameworks.lock")); print(l["repo"], l["release"] or "-", l["asset"])')
+          if [ "$release" = "-" ]; then
+            echo "frameworks.lock pins no fork release yet, the manifest ships without frameworks"
+            exit 0
+          fi
+          gh release download "$release" -R "$repo" -p "$asset" -D build/fork
+          echo "path=build/fork/$asset" >> "$GITHUB_OUTPUT"
+      - name: Assemble images.json
+        run: |
+          args=()
+          if [ -n "${{ steps.fork.outputs.path }}" ]; then
+            args=(--frameworks "${{ steps.fork.outputs.path }}")
+          fi
+          scripts/assemble-manifest --release "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --resolved build/images-resolved.json \
+            --verify build/verify/verify-amd64/verify-amd64.json \
+            --verify build/verify/verify-arm64/verify-arm64.json \
+            --woo-seed build/woo-seed/woocommerce.json \
+            --pts-dir build/release "${args[@]}" > build/release/images.json
+          cat build/release/images.json
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag every image with the release
+        run: |
+          python3 -c 'import json; [print(i["repo"], i["index"]) for n, i in json.load(open("build/images-resolved.json"))["images"].items()]' |
+          while read -r repo index; do
+            docker buildx imagetools create -t "$repo:$GITHUB_REF_NAME" "$repo@$index"
+            tagged=$(docker buildx imagetools inspect "$repo:$GITHUB_REF_NAME" --format '{{json .Manifest}}' | python3 -c 'import json, sys; print(json.load(sys.stdin)["digest"])')
+            [ "$tagged" = "$index" ] || { echo "$repo:$GITHUB_REF_NAME points at $tagged, expected $index"; exit 1; }
+            echo "tagged $repo:$GITHUB_REF_NAME"
+          done
+      - name: Write SHA256SUMS
+        working-directory: build/release
+        run: |
+          mapfile -t downloads < <(python3 -c 'import json; [print(d["file"]) for d in json.load(open("../../pts.lock"))["downloads"]]')
+          sha256sum images.json pts.tar.gz "${downloads[@]}" > SHA256SUMS
+          cat SHA256SUMS
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          scripts/release-notes build/release/images.json > build/release-notes.md
+          gh release create "$GITHUB_REF_NAME" build/release/* --title "$GITHUB_REF_NAME" --notes-file build/release-notes.md --verify-tag

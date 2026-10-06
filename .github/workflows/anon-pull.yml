@@ -1,0 +1,62 @@
+name: anon-pull
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Built image tag to check (a commit sha)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve pushed digests
+        run: |
+          mkdir -p build
+          scripts/resolve-images "${{ inputs.tag }}" > build/images-resolved.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: anon-pull-images
+          path: build/images-resolved.json
+          if-no-files-found: error
+
+  check:
+    needs: resolve
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: anon-pull-images
+          path: build
+      - name: Fetch a token and every manifest without credentials
+        run: scripts/anon-pull build/images-resolved.json
+      - name: Pull one image with an empty docker config
+        run: |
+          DOCKER_CONFIG=$(mktemp -d)
+          export DOCKER_CONFIG
+          ref=$(python3 -c 'import json; i = json.load(open("build/images-resolved.json"))["images"]["wrk"]; print(i["repo"] + "@" + i["platforms"]["linux/amd64"]["digest"])')
+          docker pull "$ref"
+          docker run --rm "$ref" wrk -v || true
