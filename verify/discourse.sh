@@ -28,7 +28,8 @@ ready_seconds=$(( $(date +%s) - start ))
 topic=$(json_get "$work/discourse.json" topic_path)
 [ "$(page_status "$topic")" = 200 ] || fail "$topic didn't answer 200"
 [ "$(docker exec rc-verify-discourse su postgres -c 'psql -tA -c "show shared_buffers"')" = "$shared_buffers" ] || fail "discourse ignored RC_DB_SHARED_BUFFERS"
-if docker exec rc-verify-discourse ps -eo args | grep -q '^\[rosetta\]'; then
+processes=$(docker exec rc-verify-discourse ps -eo args)
+if grep -q '^\[rosetta\]' <<< "$processes"; then
   log "running under rosetta, which hides pitchfork's worker titles, so the worker count goes unchecked"
 else
   wait_for "$workers app workers" 120 sh -c "[ \"\$(docker exec rc-verify-discourse ps -eo args | grep -c '[w]orker\[')\" = $workers ]"
