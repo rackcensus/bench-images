@@ -29,12 +29,72 @@ jobs:
           path: build/woo-seed
           if-no-files-found: error
 
+  discourse-seed:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+      - name: Build the Discourse seed
+        run: docker buildx build --platform linux/amd64 --target discourse-seed --output type=local,dest=build/discourse-seed images/discourse
+      - name: Show the seed manifest
+        run: cat build/discourse-seed/discourse.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: discourse-seed
+          path: build/discourse-seed
+          if-no-files-found: error
+
+  ghost-seed:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+      - name: Build the Ghost seed
+        run: docker buildx build --platform linux/amd64 --target ghost-seed --output type=local,dest=build/ghost-seed images/ghost-app
+      - name: Show the seed counts
+        run: python3 -c 'import json; m = json.load(open("build/ghost-seed/ghost.json")); print(m["counts"], m["versions"])'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ghost-seed
+          path: build/ghost-seed
+          if-no-files-found: error
+
+  wagtail-seed:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+      - name: Build the Wagtail seed
+        run: docker buildx build --platform linux/amd64 --target wagtail-seed --output type=local,dest=build/wagtail-seed images/wagtail-app
+      - name: Show the seed counts
+        run: python3 -c 'import json; m = json.load(open("build/wagtail-seed/wagtail.json")); print(m["counts"], m["versions"])'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: wagtail-seed
+          path: build/wagtail-seed
+          if-no-files-found: error
+
   build:
-    needs: seed
+    needs: [seed, discourse-seed, ghost-seed, wagtail-seed]
     strategy:
       fail-fast: false
       matrix:
-        image: [wrk, sysbench, memtier, tfb-postgres, woo-app, woo-db]
+        image: [wrk, sysbench, memtier, tfb-postgres, woo-app, woo-db, discourse, ghost-app, ghost-db, wagtail-app, wagtail-db]
         arch: [amd64, arm64]
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     steps:
@@ -44,6 +104,21 @@ jobs:
         with:
           name: woo-seed
           path: build/woo-seed
+      - if: matrix.image == 'discourse'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: discourse-seed
+          path: build/discourse-seed
+      - if: startsWith(matrix.image, 'ghost-')
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ghost-seed
+          path: build/ghost-seed
+      - if: startsWith(matrix.image, 'wagtail-')
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: wagtail-seed
+          path: build/wagtail-seed
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
         with:
           buildkitd-config-inline: |
@@ -59,7 +134,7 @@ jobs:
         with:
           context: images/${{ matrix.image }}
           platforms: linux/${{ matrix.arch }}
-          build-contexts: ${{ startsWith(matrix.image, 'woo-') && 'woo-seed=build/woo-seed' || '' }}
+          build-contexts: ${{ startsWith(matrix.image, 'woo-') && 'woo-seed=build/woo-seed' || matrix.image == 'discourse' && 'discourse-seed=build/discourse-seed' || startsWith(matrix.image, 'ghost-') && 'ghost-seed=build/ghost-seed' || startsWith(matrix.image, 'wagtail-') && 'wagtail-seed=build/wagtail-seed' || '' }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -86,7 +161,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [wrk, sysbench, memtier, tfb-postgres, woo-app, woo-db]
+        image: [wrk, sysbench, memtier, tfb-postgres, woo-app, woo-db, discourse, ghost-app, ghost-db, wagtail-app, wagtail-db]
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:

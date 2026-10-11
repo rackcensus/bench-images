@@ -24,7 +24,7 @@ jobs:
       matrix:
         arch: [amd64, arm64]
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
@@ -51,6 +51,12 @@ jobs:
         run: verify/all.sh build/verify build/refs.json pgbench
       - name: k6 against woo-app and woo-db
         run: verify/all.sh build/verify build/refs.json woo
+      - name: k6 against discourse, signed in and anonymous
+        run: verify/all.sh build/verify build/refs.json discourse
+      - name: k6 against ghost-app and ghost-db, readers and staff
+        run: verify/all.sh build/verify build/refs.json ghost
+      - name: k6 against wagtail-app, wagtail-db and redis, visitors and editors
+        run: verify/all.sh build/verify build/refs.json wagtail
       - name: Collect results
         run: |
           python3 verify/collect.py build/verify ${{ matrix.arch }} build/sizes.json build/refs.json > build/verify/verify-${{ matrix.arch }}.json

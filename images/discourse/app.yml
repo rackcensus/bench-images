@@ -1,0 +1,27 @@
+templates:
+  - "templates/postgres.template.yml"
+  - "templates/redis.template.yml"
+  - "templates/web.template.yml"
+
+params:
+  db_default_text_search_config: "pg_catalog.english"
+  db_shared_buffers: "128MB"
+  version: 7d3d93e083b41f478616fa6447b884a50911187e
+
+env:
+  LC_ALL: en_US.UTF-8
+  LANG: en_US.UTF-8
+  LANGUAGE: en_US.UTF-8
+  UNICORN_WORKERS: 2
+  DISCOURSE_HOSTNAME: discourse
+  DISCOURSE_SMTP_ADDRESS: localhost
+  DISCOURSE_SKIP_EMAIL_SETUP: "1"
+  DISCOURSE_MAX_REQS_PER_IP_MODE: none
+
+hooks:
+  after_code:
+    - exec:
+        cd: $home/plugins
+        cmd:
+          - git clone https://github.com/discourse/docker_manager.git
+          - git -C docker_manager -c advice.detachedHead=false checkout 0d26ddaac1f5073d989f689c6b928cbb53d93c0d

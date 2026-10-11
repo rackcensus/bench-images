@@ -1,0 +1,13 @@
+#!/usr/local/bin/node
+const path = process.argv[2] || '/';
+const http = require('http');
+const request = http.get({ host: '127.0.0.1', port: 2368, path, headers: { Host: 'ghost' }, timeout: 30000 }, (response) => {
+  response.resume();
+  process.stdout.write(String(response.statusCode));
+  process.exit(0);
+});
+request.on('timeout', () => request.destroy(new Error('timed out')));
+request.on('error', (error) => {
+  process.stderr.write(`${error.message}\n`);
+  process.exit(1);
+});

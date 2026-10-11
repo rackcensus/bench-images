@@ -6,7 +6,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 REGISTRY = "ghcr.io/rackcensus"
-BUILT = ["wrk", "sysbench", "memtier", "tfb-postgres", "woo-app", "woo-db"]
+BUILT = ["wrk", "sysbench", "memtier", "tfb-postgres", "woo-app", "woo-db", "discourse", "ghost-app", "ghost-db", "wagtail-app", "wagtail-db"]
 PLATFORMS = ["linux/amd64", "linux/arm64"]
 
 

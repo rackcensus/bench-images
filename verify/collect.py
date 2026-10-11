@@ -5,7 +5,7 @@ import platform
 import subprocess
 import sys
 
-CHECKS = ["wrk", "sysbench", "memtier", "pgbench", "woo"]
+CHECKS = ["wrk", "sysbench", "memtier", "pgbench", "woo", "discourse", "ghost", "wagtail"]
 
 
 def main(argv):

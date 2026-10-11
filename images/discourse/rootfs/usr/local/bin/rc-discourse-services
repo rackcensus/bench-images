@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pg_ctl=/usr/lib/postgresql/18/bin/pg_ctl
+pg_conf=/etc/postgresql/18/main
+
+case "${1:-}" in
+  start)
+    su postgres -c "$pg_ctl -D $pg_conf -w -t 120 -l /tmp/rc-postgres.log start"
+    chpst -u redis -U redis /usr/bin/redis-server /etc/redis/redis.conf --daemonize yes
+    for _ in $(seq 1 60); do
+      redis-cli ping 2> /dev/null | grep -q PONG && exit 0
+      sleep 1
+    done
+    echo "redis didn't answer after 60s" >&2
+    exit 1
+    ;;
+  stop)
+    redis-cli shutdown nosave > /dev/null 2>&1 || true
+    su postgres -c "$pg_ctl -D $pg_conf -w -t 120 -m fast stop"
+    ;;
+  *)
+    echo "usage: rc-discourse-services start|stop" >&2
+    exit 64
+    ;;
+esac

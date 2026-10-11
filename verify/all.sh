@@ -4,7 +4,7 @@ source "$(dirname "$0")/lib.sh"
 
 out=$(mkdir -p "$1" && cd "$1" && pwd)
 refs=$2
-only=${3:-wrk,sysbench,memtier,pgbench,woo}
+only=${3:-wrk,sysbench,memtier,pgbench,woo,discourse,ghost,wagtail}
 http_server=docker.io/library/nginx:1.30.5-alpine@sha256:0985e772fb9f729e6fa0980da05fca5d9c468e870eed43071545afa9d2e27d94
 
 ref() {
@@ -24,6 +24,9 @@ for check in ${only//,/ }; do
     memtier) "$VERIFY_DIR/memtier.sh" "$out" "$(ref memtier)" "$(ref redis)" ;;
     pgbench) "$VERIFY_DIR/pgbench.sh" "$out" "$(ref postgres)" "$(ref tfb-postgres)" ;;
     woo) "$VERIFY_DIR/woo.sh" "$out" "$(ref woo-app)" "$(ref woo-db)" "$(ref k6)" ;;
+    discourse) "$VERIFY_DIR/discourse.sh" "$out" "$(ref discourse)" "$(ref k6)" ;;
+    ghost) "$VERIFY_DIR/ghost.sh" "$out" "$(ref ghost-app)" "$(ref ghost-db)" "$(ref k6)" ;;
+    wagtail) "$VERIFY_DIR/wagtail.sh" "$out" "$(ref wagtail-app)" "$(ref wagtail-db)" "$(ref redis)" "$(ref k6)" ;;
     *) fail "unknown check $check" ;;
   esac
   [ -s "$out/$check.json" ] || fail "$check finished without writing $check.json"

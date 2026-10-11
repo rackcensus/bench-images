@@ -14,6 +14,11 @@ Everything here is built or copied for `linux/amd64` and `linux/arm64`, and ever
 | `tfb-postgres` | Database for the framework tests | TechEmpower's Postgres toolset at upstream commit `57d92fb`, on `postgres:18.6` |
 | `woo-app` | WooCommerce store, web tier | php-fpm 8.4.26, nginx 1.26, tini; WordPress 7.1.2, WooCommerce 11.1.2, Twenty Twenty-Five 1.5 |
 | `woo-db` | WooCommerce store, database | MariaDB 12.3.3 (the current LTS) with the seeded store loaded on first start |
+| `discourse` | Discourse forum, the whole stack in one container | Discourse's own standalone install (`discourse/base:2.0.20260915-0028`, `discourse_docker` at `ac99052`, Discourse at `7d3d93e`, `docker_manager` at `0d26dda`) with a seeded forum baked in |
+| `ghost-app` | Ghost blog, app | `ghost:6.69.0-alpine` (Node 22.23.3), the image Ghost's own `ghost-docker` setup runs, with the run config baked in |
+| `wagtail-app` | Wagtail site, app | Wagtail's `bakerydemo` at `c8f8255` built with its own production Dockerfile: `python:3.12.15-slim-trixie`, uWSGI 2.0.31, Wagtail 8.0, Django 6.0.9, with locked and hashed requirements |
+| `wagtail-db` | Wagtail site, database | `postgres:18.6` with the seeded bakery loaded on first start |
+| `ghost-db` | Ghost blog, database | `mysql:8.0.44`, the version and digest `ghost-docker` pins, with the seeded blog loaded on first start |
 | `postgres` | Dedicated Postgres tests | Copy of `postgres:18.6` |
 | `mysql` | sysbench target | Copy of `mysql:8.4.11` |
 | `redis` | memtier target | Copy of `redis:8.10.2` |
@@ -86,6 +91,88 @@ CI builds the seed once and hands the same directory to both architectures, so a
 
 The cart and checkout pages are WooCommerce's block versions. They render the cart server side as preloaded Store API data, so a cart check looks for `%22items_count%22%3A1%2C` and the URL-encoded `"id":<product>,` in the HTML rather than a product name in a table.
 
+### discourse
+
+This is the container a person gets from Discourse's own install guide: `postgres`, `redis` and `web` templates fed through `pups` on top of `discourse/base`, the same thing `./launcher bootstrap app` does. Postgres 18, Redis, nginx, the app server and Sidekiq all run inside it under runit, so a box sees one container, the way a real install looks.
+
+`images/discourse/bootstrap` rebuilds what the launcher does: it concatenates the templates and `app.yml` with the launcher's separator, works out the merged `env` block, and pipes the result into `pups --stdin`. It runs inside `docker build`, which `launcher` can't, and the build checks that the Discourse and `docker_manager` commits it ended up on are the pinned ones. The merged environment lands in `/etc/rackcensus-discourse.env` because the launcher would have passed it as `-e` flags at run time.
+
+Three things differ from the sample `standalone.yml`, all on purpose:
+
+- `web.ratelimited.template.yml` is left out and `DISCOURSE_MAX_REQS_PER_IP_MODE=none` is set. Both limit requests per IP address, and every request in a benchmark comes from one IP. The defaults allow 50 requests per 10 seconds, so the load generator would be blocked almost immediately.
+- The hostname is `discourse`, so the container answers on a Docker network without DNS. Mail goes nowhere (`DISCOURSE_SKIP_EMAIL_SETUP=1`).
+- `docker_manager` is checked out at a fixed commit instead of whatever `main` is at build time.
+
+Everything else stays stock, including the parts that change the numbers: the anonymous page cache in Redis, the overload protection that sheds anonymous requests once the queue is a second deep, `PRECOMPILE_ON_BOOT`, and the GC settings from `web.template.yml`.
+
+`RC_WORKERS` sets `UNICORN_WORKERS` and `RC_DB_SHARED_BUFFERS` (like `256MB`) rewrites `shared_buffers` in `/etc/postgresql/18/main/postgresql.conf`. Postgres reads that file, not the copy under `/shared/postgres_data`. Anything malformed exits with status 64. Unset, it keeps the bootstrap values: 2 workers and 128 MB.
+
+```sh
+docker network create forum
+docker run -d --network forum --name discourse --shm-size=512m \
+  -e RC_WORKERS=4 -e RC_DB_SHARED_BUFFERS=256MB ghcr.io/rackcensus/discourse@sha256:...
+docker exec discourse curl -s -H 'Host: discourse' http://127.0.0.1/srv/status
+```
+
+It answers within about 15 seconds. Send a browser `User-Agent`, because Discourse serves its stripped down crawler page to anything else, and that includes `ab`, curl and k6's default. Discourse's own `script/bench.rb` measures the crawler page for exactly that reason.
+
+### The Discourse seed
+
+The seed is a build stage (`discourse-seed`). It runs `seed/seed.rb`, which is Discourse's `script/profile_db_generator.rb` adapted to the production environment (GPLv2 like the original, see `seed/NOTICE`): 100 users plus `admin1`, 10 categories, 100 topics with 2,000 replies, and the perf test topic with 100 replies, with the random generator seeded so the content comes out the same way every time. It also raises the login rate limits so a few hundred virtual users can sign in from one address, then dumps the database with `pg_dump --format=custom`.
+
+`discourse.json` records the topic path, the usernames and their shared password, the counts, the versions and the dump's sha256. The final stage restores the dump into a fresh database, checks the user count and the sha, and copies `discourse.json` to `/usr/share/rackcensus/discourse.json`. Like the WooCommerce seed, CI builds it once on amd64 and hands the same dump to both architectures.
+
+The image is about 4 GB unpacked and 1.6 GB compressed, the largest one here by a wide margin.
+
+### ghost-app and ghost-db
+
+These follow Ghost's official self-hosting setup, [`ghost-docker`](https://github.com/TryGhost/ghost-docker): the `ghost` image on Alpine and MySQL 8.0 with stock settings, nothing tuned. Ghost has no worker setting, it's one Node process, and `ghost-docker` leaves MySQL at its defaults (a 128 MB InnoDB buffer pool), so there's nothing to size per box. That's the point: this is what a person who follows Ghost's guide ends up running.
+
+What's different from `ghost-docker`:
+
+- No Caddy in front. It only terminates TLS there. Ghost answers on port 2368 and its `url` is `http://ghost`, so it works on a Docker network without DNS.
+- `security__staffDeviceVerification=false`. Ghost 6 emails a code to staff signing in from a new device, which a load generator can't read. A real editor's browser gets remembered after the first code, so turning it off matches day to day use.
+- ActivityPub and Tinybird analytics are left off, as they are in `ghost-docker` until you opt in.
+- Mail goes nowhere.
+
+`ghost-app` ships `rc-ghost-status <path>`, which prints the status code Ghost returns for a path, because the Alpine image has no curl. Ghost is ready once `/ghost/api/admin/site/` answers 200.
+
+```sh
+docker network create blog
+docker run -d --network blog --name ghost-db ghcr.io/rackcensus/ghost-db@sha256:...
+docker exec ghost-db mysqladmin ping -h 127.0.0.1 -uroot -pghost --silent
+docker run -d --network blog --name ghost ghcr.io/rackcensus/ghost-app@sha256:...
+docker exec ghost rc-ghost-status /ghost/api/admin/site/
+```
+
+Start the database first and wait until it answers over TCP. The MySQL entrypoint loads the seed with networking off, so TCP only answers once the seed is in. Ghost exits if it can't reach the database when it starts.
+
+### wagtail-app and wagtail-db
+
+These follow [`bakerydemo`](https://github.com/wagtail/bakerydemo), Wagtail's official demo site, the way its production Dockerfile and `docker-compose.yml` run it: uWSGI from `etc/uwsgi.ini`, Postgres, and Redis as the Django cache. Its `uwsgi.ini` fixes uWSGI at 2 workers with 4 threads each, whatever the box, and Postgres and Redis run on stock settings. Nothing here changes that, so on a 4 or 8 vCPU box this setup leaves cores idle, which is what a person copying the demo gets.
+
+What's different from bakerydemo:
+
+- Requirements come from `requirements.lock`, which `uv pip compile --universal --generate-hashes` resolved from `requirements/production.txt` with `--exclude-newer 2026-10-10`, so a rebuild gets the same packages. The upstream Dockerfile resolves the version ranges at build time.
+- `SECURE_SSL_REDIRECT=false`, because there's no TLS in front, and a fixed `DJANGO_SECRET_KEY` that isn't a secret.
+- Postgres is 18.6 and Redis is 8.10.2, the mirrors used elsewhere here, instead of the compose file's 18.1 and 8.4.
+
+Redis isn't its own image: the agent runs the `redis` mirror as `wagtail-redis`. `wagtail-app` ships `rc-wagtail-status <path>`, which prints the status code for a path because the slim image has no curl.
+
+uWSGI's `http-socket` closes the connection after every response even though `uwsgi.ini` sets `http-keepalive`. A client that reuses the connection gets a reset. Browsers and Go's HTTP client retry a GET on a fresh connection without saying so, but not a POST, so the k6 script runs with `noConnectionReuse` and opens a connection per request, which is what this server makes every client do anyway.
+
+### The Wagtail seed
+
+The seed is a build stage (`wagtail-seed`) in `images/wagtail-app`. It copies Python, the virtualenv and the code into `postgres:18.6` (both are Debian trixie), runs the migrations and bakerydemo's `load_initial_data`, then bakerydemo's own `create_random_data 50 20 0`, which its help text describes as useful for load testing. That adds 50 bread, location, blog and standard pages each on top of the demo content, about 235 live pages in all, reusing the demo's images. `seed/seed.py` then crawls every live page and the search page once, so the 600 or so image renditions exist before the first measured request, and checks the admin editor answers. The database goes out through `pg_dump --no-owner`, and the media directory, renditions included, gets copied into `wagtail-app`.
+
+`wagtail.json` records the page paths, the search terms, the page ids the editor test opens, the admin login (`admin`, bakerydemo's documented password), the counts, the versions and the dump's sha256.
+
+### The Ghost seed
+
+The seed is a build stage (`ghost-seed`) in `images/ghost-app`. Ghost needs MySQL to build its schema, and MySQL 8.0 isn't packaged for Alpine, so the stage starts from the same `mysql:8.0.44` image and copies Node and Ghost out of the Debian `ghost:6.69.0` image, which is the same Ghost release built against glibc. `seed/seed.js` drives Ghost's own Admin API: it sets up the owner, then creates 10 tags, 200 published posts spread over two years, 20 drafts and 1,000 members, with a seeded random generator so the content comes out the same every time. Ghost's default "Coming soon" post and "Getting Started" tag stay, the way a fresh install has them. Then it dumps the database with `mysqldump`.
+
+`ghost.json` records the post, tag and author paths, the draft ids the staff test edits, the owner's login, the counts, the versions and the dump's sha256. Both images carry the same `ghost.json`, and the verify job refuses a pair built from different seeds.
+
 ## Mirrors
 
 The five mirrored images are copied with `docker buildx imagetools create` from the platform digests in `mirrors.lock`. Nothing gets rebuilt, so the amd64 and arm64 digests on GHCR are the same digests Docker Hub serves. Only the index differs, because it carries two platforms and a source annotation. `scripts/resolve-images` refuses to continue if a mirrored platform digest doesn't match the lock.
@@ -129,6 +216,9 @@ PTS at `be12163` already carries `pts/stream-1.3.4` and `pts/schbench-1.2.0` in 
 - sysbench `oltp_read_write` and `oltp_read_only` against the MySQL mirror over a unix socket, resetting binary logs between runs
 - memtier at 1:10 and 1:1 against the Redis mirror after a 10,000 key prefill
 - pg_test_fsync, `pgbench -i`, and pgbench read-write and select-only with sampled logs against the Postgres mirror, then the `tfb-postgres` schema, the `-c` overrides and the missing preload
+- k6 against `discourse` with 2 workers: the signed in and anonymous mixes for 15 seconds each, failing on any failed check or failed request, while the container's memory gets sampled
+- k6 against `ghost-app` and `ghost-db`: readers (home, post, tag, author and RSS pages) and staff in Ghost Admin (post list, post editor, saving a draft, member list) for 15 seconds each, failing on any failed check or any failed request in a measured step, while both containers' memory gets sampled. Ghost sometimes answers several staff signing in at the same moment with a MySQL deadlock, so the k6 script retries a sign-in up to five times. Sign-ins aren't measured.
+- k6 against `wagtail-app`, `wagtail-db` and the Redis mirror: visitors (home, blog index, blog post, bread, location and search pages) and editors signed into the Wagtail admin (dashboard, page explorer, page editor, image library, page search) for 15 seconds each, after checking uWSGI runs a master and 2 workers. Any failed check or request fails the job.
 - k6 against `woo-app` and `woo-db`: a page mix of home, shop, category, product and search, then a cart flow of `/?add-to-cart=ID`, cart and checkout with a fresh cookie jar per iteration, checking the `woocommerce_items_in_cart` cookie, the cart contents and the checkout block. Any failed check or failed request fails the job.
 
 While k6 runs, a sidecar that shares the app's PID namespace (with `SYS_PTRACE` and nothing else) samples `smaps_rollup` for every php-fpm child. RSS counts the shared OPcache memory in every child, so the job records RSS, PSS and private memory side by side. The manifest's `rss_proc_mb` carries PSS, rounded up, because that's what the sizing math wants (the field kept its name for compatibility). `memory` has all three.
@@ -192,7 +282,14 @@ Schema 1, as the app expects it:
             "platforms": {"linux/amd64": {"digest": "sha256:...", "compressed_bytes": 0, "unpacked_bytes": 0}, "linux/arm64": {}}}
   },
   "frameworks": [],
-  "woocommerce": {"rss_proc_mb": {"amd64": 0, "arm64": 0}, "product_ids": [], "category_paths": [], "search_terms": []}
+  "woocommerce": {"rss_proc_mb": {"amd64": 0, "arm64": 0}, "product_ids": [], "category_paths": [], "search_terms": []},
+  "discourse": {"topic_path": "/t/i-am-a-topic-used-for-perf-tests/117", "user_activity_path": "/u/admin1/activity", "usernames": [], "password": "...",
+                "counts": {}, "dump_sha256": "...", "versions": {}, "memory": {"amd64": {}, "arm64": {}}},
+  "ghost": {"post_paths": [], "tag_paths": [], "author_path": "/author/rack/", "draft_post_ids": [], "staff_email": "owner@example.com", "password": "...",
+            "counts": {}, "dump_sha256": "...", "versions": {}, "memory": {"amd64": {}, "arm64": {}}},
+  "wagtail": {"home_path": "/", "blog_index_path": "/blog/", "blog_paths": [], "bread_paths": [], "location_paths": [], "search_terms": [],
+              "explorer_page_id": 0, "edit_page_ids": [], "username": "admin", "password": "...",
+              "counts": {}, "dump_sha256": "...", "versions": {}, "memory": {"amd64": {}, "arm64": {}}}
 }
 ```
 
@@ -204,7 +301,7 @@ Every `url` under `pts` is an anonymous GHCR blob URL, so fetch a token from `re
 scripts/build-local arm64
 ```
 
-builds every image for one architecture as `rc/<name>:<arch>`, building the seed into `build/woo-seed` the first time. Pass a builder name as the second argument to build through a different buildx builder (handy for amd64 under emulation). To run the checks, write a refs file that maps each image name to a local tag or a digest reference (`wrk`, `sysbench`, `memtier`, `tfb-postgres`, `woo-app`, `woo-db`, `postgres`, `mysql`, `redis`, `k6`, and optionally `http-server`) and run:
+builds every image for one architecture as `rc/<name>:<arch>`, building the seeds into `build/woo-seed`, `build/discourse-seed`, `build/ghost-seed` and `build/wagtail-seed` the first time. Pass a builder name as the second argument to build through a different buildx builder (handy for amd64 under emulation). To run the checks, write a refs file that maps each image name to a local tag or a digest reference (`wrk`, `sysbench`, `memtier`, `tfb-postgres`, `woo-app`, `woo-db`, `discourse`, `ghost-app`, `ghost-db`, `wagtail-app`, `wagtail-db`, `postgres`, `mysql`, `redis`, `k6`, and optionally `http-server`) and run:
 
 ```sh
 verify/all.sh build/verify build/refs.json

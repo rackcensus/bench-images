@@ -5,7 +5,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 gh_repo=rackcensus/bench-images
 registry=ghcr.io/rackcensus
 builder=rc-release
-built=(wrk sysbench memtier tfb-postgres woo-app woo-db)
+built=(wrk sysbench memtier tfb-postgres woo-app woo-db discourse ghost-app ghost-db wagtail-app wagtail-db)
 arches=(amd64 arm64)
 
 usage() {
@@ -78,12 +78,24 @@ build_and_push() {
     docker buildx create --name "$builder" --driver docker-container --buildkitd-config "$work/buildkitd.toml" > /dev/null
     echo "created the $builder buildx builder, it keeps its build cache between releases"
   fi
-  local native seed image arch digest
+  local native seed discourse_seed ghost_seed wagtail_seed image arch digest
   native=$(docker version -f '{{.Server.Arch}}')
   seed="$out/woo-seed"
   docker buildx build --builder "$builder" --platform "linux/$native" --target woo-seed \
     --output "type=local,dest=$seed" images/woo-app
   echo "built the woocommerce seed on $native"
+  discourse_seed="$out/discourse-seed"
+  docker buildx build --builder "$builder" --platform "linux/$native" --target discourse-seed \
+    --output "type=local,dest=$discourse_seed" images/discourse
+  echo "built the discourse seed on $native"
+  ghost_seed="$out/ghost-seed"
+  docker buildx build --builder "$builder" --platform "linux/$native" --target ghost-seed \
+    --output "type=local,dest=$ghost_seed" images/ghost-app
+  echo "built the ghost seed on $native"
+  wagtail_seed="$out/wagtail-seed"
+  docker buildx build --builder "$builder" --platform "linux/$native" --target wagtail-seed \
+    --output "type=local,dest=$wagtail_seed" images/wagtail-app
+  echo "built the wagtail seed on $native"
   for image in "${built[@]}"; do
     local sources=()
     for arch in "${arches[@]}"; do
@@ -95,6 +107,9 @@ build_and_push() {
         --metadata-file "$work/$image-$arch.json")
       case "$image" in
         woo-*) args+=(--build-context "woo-seed=$seed") ;;
+        discourse) args+=(--build-context "discourse-seed=$discourse_seed") ;;
+        ghost-*) args+=(--build-context "ghost-seed=$ghost_seed") ;;
+        wagtail-*) args+=(--build-context "wagtail-seed=$wagtail_seed") ;;
       esac
       docker buildx build "${args[@]}" "images/$image"
       digest=$(json "$work/$image-$arch.json" containerimage.digest)
@@ -156,6 +171,21 @@ docker pull -q "$woo_app" > /dev/null
 docker run --rm --entrypoint cat "$woo_app" /usr/share/rackcensus/woocommerce.json > "$out/woocommerce.json"
 echo "read the woocommerce seed manifest out of $woo_app"
 
+discourse_app=$(json "$out/refs-$(docker version -f '{{.Server.Arch}}').json" discourse)
+docker pull -q "$discourse_app" > /dev/null
+docker run --rm --entrypoint cat "$discourse_app" /usr/share/rackcensus/discourse.json > "$out/discourse.json"
+echo "read the discourse seed manifest out of $discourse_app"
+
+ghost_app=$(json "$out/refs-$(docker version -f '{{.Server.Arch}}').json" ghost-app)
+docker pull -q "$ghost_app" > /dev/null
+docker run --rm --entrypoint cat "$ghost_app" /usr/share/rackcensus/ghost.json > "$out/ghost.json"
+echo "read the ghost seed manifest out of $ghost_app"
+
+wagtail_app=$(json "$out/refs-$(docker version -f '{{.Server.Arch}}').json" wagtail-app)
+docker pull -q "$wagtail_app" > /dev/null
+docker run --rm --entrypoint cat "$wagtail_app" /usr/share/rackcensus/wagtail.json > "$out/wagtail.json"
+echo "read the wagtail seed manifest out of $wagtail_app"
+
 scripts/pts-archive "$out/assets"
 
 frameworks=()
@@ -169,7 +199,7 @@ fi
 
 scripts/assemble-manifest --release "$release" --resolved "$out/images-resolved.json" \
   --verify "$out/verify-amd64.json" --verify "$out/verify-arm64.json" \
-  --woo-seed "$out/woocommerce.json" --pts-dir "$out/assets" "${frameworks[@]}" > "$out/assets/images.json"
+  --woo-seed "$out/woocommerce.json" --discourse-seed "$out/discourse.json" --ghost-seed "$out/ghost.json" --wagtail-seed "$out/wagtail.json" --pts-dir "$out/assets" "${frameworks[@]}" > "$out/assets/images.json"
 python3 -I -c 'import hashlib, json, pathlib, sys
 assets, lock = pathlib.Path(sys.argv[1]), json.load(open(sys.argv[2]))
 names = ["images.json", lock["archive"]["file"]] + [d["file"] for d in lock["downloads"]]

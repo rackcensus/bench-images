@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+launcher_dir=$1
+config=$2
+input=$(mktemp)
+
+templates=$(ruby -ryaml -e 'puts YAML.load_file(ARGV[0])["templates"]' "$config")
+printf 'hack: true' > "$input"
+for template in $templates; do
+  printf ' _FILE_SEPERATOR_ ' >> "$input"
+  cat "$launcher_dir/$template" >> "$input"
+done
+printf ' _FILE_SEPERATOR_ ' >> "$input"
+cat "$config" >> "$input"
+
+env_file=$(mktemp)
+ruby -ryaml -rshellwords -e '
+  env = { "LANG" => "en_US.UTF-8" }
+  File.read(ARGV[0]).split("_FILE_SEPERATOR_").each do |yml|
+    env.merge!(YAML.load(yml.strip)["env"] || {})
+  end
+  env.each do |key, value|
+    abort "env #{key} is a hash" if value.is_a?(Hash)
+    puts "export #{key}=#{Shellwords.escape(value.to_s)}"
+  end
+' "$input" > "$env_file"
+# shellcheck disable=SC1090
+source "$env_file"
+cp "$env_file" /etc/rackcensus-discourse.env
+rm -f "$env_file"
+
+if gem which pups > /dev/null 2>&1; then
+  /usr/local/bin/pups --stdin < "$input"
+else
+  (cd /pups && /pups/bin/pups --stdin) < "$input"
+fi
+rm -f "$input"

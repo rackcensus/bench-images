@@ -1,0 +1,2 @@
+seed.rb is adapted from script/profile_db_generator.rb in Discourse (https://github.com/discourse/discourse) at commit 7d3d93e083b41f478616fa6447b884a50911187e.
+Discourse is distributed under the GNU General Public License version 2, included here as LICENSE.discourse, and so is seed.rb.

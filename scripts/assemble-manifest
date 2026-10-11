@@ -93,12 +93,61 @@ def build_woocommerce(seed, verify):
     }
 
 
+def build_discourse(seed, verify):
+    for arch in ARCHES:
+        verified = verify[arch]["checks"]["discourse"]["seed"]
+        if verified["dump_sha256"] != seed["dump_sha256"]:
+            raise SystemExit(f"discourse seed verified on {arch} differs from the seed being released")
+    return {
+        "topic_path": seed["topic_path"],
+        "user_activity_path": seed["user_activity_path"],
+        "usernames": seed["usernames"],
+        "password": seed["password"],
+        "counts": seed["counts"],
+        "dump_sha256": seed["dump_sha256"],
+        "versions": seed["versions"],
+        "memory": {arch: verify[arch]["checks"]["discourse"]["memory"] for arch in ARCHES},
+    }
+
+
+def build_ghost(seed, verify):
+    for arch in ARCHES:
+        verified = verify[arch]["checks"]["ghost"]["seed"]
+        if verified["dump_sha256"] != seed["dump_sha256"]:
+            raise SystemExit(f"ghost seed verified on {arch} differs from the seed being released")
+    return {
+        "post_paths": seed["post_paths"],
+        "tag_paths": seed["tag_paths"],
+        "author_path": seed["author_path"],
+        "draft_post_ids": seed["draft_post_ids"],
+        "staff_email": seed["staff_email"],
+        "password": seed["password"],
+        "counts": seed["counts"],
+        "dump_sha256": seed["dump_sha256"],
+        "versions": seed["versions"],
+        "memory": {arch: verify[arch]["checks"]["ghost"]["memory"] for arch in ARCHES},
+    }
+
+
+def build_wagtail(seed, verify):
+    for arch in ARCHES:
+        verified = verify[arch]["checks"]["wagtail"]["seed"]
+        if verified["dump_sha256"] != seed["dump_sha256"]:
+            raise SystemExit(f"wagtail seed verified on {arch} differs from the seed being released")
+    keys = ("home_path", "blog_index_path", "blog_paths", "bread_paths", "location_paths", "search_terms", "explorer_page_id",
+            "edit_page_ids", "username", "password", "counts", "dump_sha256", "versions")
+    return {**{key: seed[key] for key in keys}, "memory": {arch: verify[arch]["checks"]["wagtail"]["memory"] for arch in ARCHES}}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--release", required=True)
     parser.add_argument("--resolved", required=True)
     parser.add_argument("--verify", action="append", required=True)
     parser.add_argument("--woo-seed", required=True)
+    parser.add_argument("--discourse-seed", required=True)
+    parser.add_argument("--ghost-seed", required=True)
+    parser.add_argument("--wagtail-seed", required=True)
     parser.add_argument("--pts-dir", required=True)
     parser.add_argument("--frameworks")
     args = parser.parse_args()
@@ -132,6 +181,9 @@ def main():
         "images": images,
         "frameworks": frameworks,
         "woocommerce": build_woocommerce(seed, verify),
+        "discourse": build_discourse(load(args.discourse_seed), verify),
+        "ghost": build_ghost(load(args.ghost_seed), verify),
+        "wagtail": build_wagtail(load(args.wagtail_seed), verify),
     }
     print(json.dumps(manifest, indent=2))
 

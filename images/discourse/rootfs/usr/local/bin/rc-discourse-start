@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pg_conf=/etc/postgresql/18/main/postgresql.conf
+workers=${RC_WORKERS:-}
+shared_buffers=${RC_DB_SHARED_BUFFERS:-}
+
+set -a
+source /etc/rackcensus-discourse.env
+set +a
+
+if [ -n "$workers" ]; then
+  [[ "$workers" =~ ^[1-9][0-9]*$ ]] || { echo "RC_WORKERS must be a positive integer, got $workers" >&2; exit 64; }
+  export UNICORN_WORKERS=$workers
+fi
+if [ -n "$shared_buffers" ]; then
+  [[ "$shared_buffers" =~ ^[1-9][0-9]*MB$ ]] || { echo "RC_DB_SHARED_BUFFERS must look like 256MB, got $shared_buffers" >&2; exit 64; }
+  sed -i -E "s/^shared_buffers = .*/shared_buffers = $shared_buffers/" "$pg_conf"
+fi
+grep -q "^shared_buffers = ${shared_buffers:-}" "$pg_conf" || { echo "couldn't set shared_buffers in $pg_conf" >&2; exit 1; }
+echo "starting discourse with UNICORN_WORKERS=$UNICORN_WORKERS and $(grep '^shared_buffers' "$pg_conf")"
+exec /sbin/boot

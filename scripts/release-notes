@@ -26,6 +26,18 @@ def main(argv):
     lines.append(f"WooCommerce store: WordPress {versions['wordpress']}, WooCommerce {versions['woocommerce']}, "
                  f"{versions['theme']}, PHP {versions['php']}. php-fpm child PSS under load: "
                  f"{woo['rss_proc_mb']['amd64']} MB on amd64, {woo['rss_proc_mb']['arm64']} MB on arm64.")
+    discourse = manifest["discourse"]
+    versions = discourse["versions"]
+    lines.append(f"Discourse forum: Discourse {versions['discourse'][:7]} on Ruby {versions['ruby']}, Rails {versions['rails']}, PostgreSQL {versions['postgres'].split()[0]}, "
+                 f"Redis {versions['redis']}, seeded with {discourse['counts']['users']} users and {discourse['counts']['posts']} posts.")
+    ghost = manifest["ghost"]
+    versions = ghost["versions"]
+    lines.append(f"Ghost blog: Ghost {versions['ghost']} on Node {versions['node']}, MySQL {versions['mysql']}, "
+                 f"seeded with {ghost['counts']['posts']} posts, {ghost['counts']['drafts']} drafts and {ghost['counts']['members']} members.")
+    wagtail = manifest["wagtail"]
+    versions = wagtail["versions"]
+    lines.append(f"Wagtail bakery: Wagtail {versions['wagtail']} on Django {versions['django']}, Python {versions['python']}, uWSGI {versions['uwsgi']}, "
+                 f"PostgreSQL {versions['postgres']}, seeded with {wagtail['counts']['pages']} pages.")
     print("\n".join(lines))
 
 
