@@ -17,10 +17,10 @@ jobs:
     timeout-minutes: 60
     env:
       CI: "true"
-      SKIP_ENV_VALIDATION: "1"
       TELEMETRY_DISABLED: "1"
       NEXT_TELEMETRY_DISABLED: "1"
       DATABASE_URL: postgresql://benchmark:benchmark@localhost:5432/benchmark
+      REDIS_URL: redis://localhost:6379
       NEXTAUTH_SECRET: rackcensus-build-fixture-not-a-production-secret
       ENCRYPTION_KEY: "00000000000000000000000000000000"
       WEBAPP_URL: http://localhost:3000
