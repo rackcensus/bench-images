@@ -54,6 +54,6 @@ jobs:
               ):
                   subprocess.run(command, check=True)
               timings[mode + "_seconds"] = time.monotonic() - started
-          path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "rackcensus-metrics.json"
+          path = pathlib.Path(os.environ["RUNNER_TEMP"]).parent / "rackcensus-metrics.json"
           path.write_text(json.dumps(timings))
           PY
