@@ -20,7 +20,7 @@ jobs:
       TELEMETRY_DISABLED: "1"
       NEXT_TELEMETRY_DISABLED: "1"
       DATABASE_URL: postgresql://benchmark:benchmark@localhost:5432/benchmark
-      REDIS_URL: redis://localhost:6379
+      REDIS_URL: redis://rc-runner-redis:6379
       NEXTAUTH_SECRET: rackcensus-build-fixture-not-a-production-secret
       ENCRYPTION_KEY: "00000000000000000000000000000000"
       WEBAPP_URL: http://localhost:3000
@@ -50,7 +50,7 @@ jobs:
                   ["pnpm", "install", "--frozen-lockfile", "--store-dir", "/tmp/rc-pnpm-store"],
                   ["pnpm", "exec", "prisma", "generate"],
                   ["pnpm", "exec", "turbo", "run", "build", "--filter=@formbricks/web...", "--force"],
-                  ["pnpm", "--filter", "@formbricks/web", "run", "test", "--minWorkers=2", "--maxWorkers=2"],
+                  ["pnpm", "--filter", "@formbricks/web", "run", "test", "--minWorkers=2", "--maxWorkers=2", "--exclude=**/.next/**", "--exclude=**/node_modules/**"],
               ):
                   subprocess.run(command, check=True)
               timings[mode + "_seconds"] = time.monotonic() - started
