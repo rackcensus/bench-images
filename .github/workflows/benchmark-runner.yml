@@ -1,0 +1,59 @@
+name: RackCensus runner benchmark
+run-name: rc-${{ inputs.correlation }}
+on:
+  workflow_dispatch:
+    inputs:
+      correlation:
+        required: true
+        type: string
+      runner_label:
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  benchmark:
+    runs-on: [self-hosted, "${{ inputs.runner_label }}"]
+    timeout-minutes: 60
+    env:
+      CI: "true"
+      TELEMETRY_DISABLED: "1"
+      NEXT_TELEMETRY_DISABLED: "1"
+      DATABASE_URL: postgresql://benchmark:benchmark@localhost:5432/benchmark
+      REDIS_URL: redis://rc-runner-redis:6379
+      NEXTAUTH_SECRET: rackcensus-build-fixture-not-a-production-secret
+      ENCRYPTION_KEY: "00000000000000000000000000000000"
+      WEBAPP_URL: http://localhost:3000
+      NEXTAUTH_URL: http://localhost:3000
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: formbricks/formbricks
+          ref: fcbb99c43d0550dc045ce701b53ae0d69afecf46
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.20.0
+      - name: Install pinned package manager
+        run: npm install --global pnpm@9.15.9
+      - name: Cold and warm build and test
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, shutil, subprocess, time
+          timings = {}
+          pathlib.Path("apps/web/.env").touch()
+          for mode in ("cold", "warm"):
+              shutil.rmtree("apps/web/.next", ignore_errors=True)
+              started = time.monotonic()
+              for command in (
+                  ["pnpm", "install", "--frozen-lockfile", "--store-dir", "/tmp/rc-pnpm-store"],
+                  ["pnpm", "exec", "prisma", "generate"],
+                  ["pnpm", "exec", "turbo", "run", "build", "--filter=@formbricks/web...", "--force"],
+                  ["pnpm", "--filter", "@formbricks/web", "run", "test", "--minWorkers=2", "--maxWorkers=2", "--exclude=**/.next/**", "--exclude=**/node_modules/**"],
+              ):
+                  subprocess.run(command, check=True)
+              timings[mode + "_seconds"] = time.monotonic() - started
+          path = pathlib.Path(os.environ["RUNNER_TEMP"]).parent / "rackcensus-metrics.json"
+          path.write_text(json.dumps(timings))
+          PY
