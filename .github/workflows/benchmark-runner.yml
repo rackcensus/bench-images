@@ -48,8 +48,8 @@ jobs:
               for command in (
                   ["pnpm", "install", "--frozen-lockfile", "--store-dir", "/tmp/rc-pnpm-store"],
                   ["pnpm", "exec", "prisma", "generate"],
-                  ["pnpm", "--filter", "@formbricks/web", "run", "test", "--minWorkers=2", "--maxWorkers=2"],
                   ["pnpm", "exec", "turbo", "run", "build", "--filter=@formbricks/web...", "--force"],
+                  ["pnpm", "--filter", "@formbricks/web", "run", "test", "--minWorkers=2", "--maxWorkers=2"],
               ):
                   subprocess.run(command, check=True)
               timings[mode + "_seconds"] = time.monotonic() - started
