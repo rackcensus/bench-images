@@ -48,7 +48,7 @@ jobs:
               for command in (
                   ["pnpm", "install", "--frozen-lockfile", "--store-dir", "/tmp/rc-pnpm-store"],
                   ["pnpm", "exec", "prisma", "generate"],
-                  ["pnpm", "--filter", "@formbricks/web", "test", "--maxWorkers=2"],
+                  ["pnpm", "--filter", "@formbricks/web", "run", "test", "--maxWorkers=2"],
                   ["pnpm", "exec", "turbo", "run", "build", "--filter=@formbricks/web...", "--force"],
               ):
                   subprocess.run(command, check=True)
