@@ -42,6 +42,7 @@ jobs:
           python3 - <<'PY'
           import json, os, pathlib, shutil, subprocess, time
           timings = {}
+          pathlib.Path("apps/web/.env").touch()
           for mode in ("cold", "warm"):
               shutil.rmtree("apps/web/.next", ignore_errors=True)
               started = time.monotonic()
